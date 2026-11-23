@@ -1,0 +1,8 @@
+{
+  "name": "cad-preview",
+  "owner": { "name": "TheBeckeros" },
+  "metadata": { "description": "Interactive 3D CAD viewer for Claude Code with B-rep selection, measurement, sections, versions and notes that go straight into the chat." },
+  "plugins": [
+    { "name": "cad-preview", "source": "./", "description": "Interactive 3D viewer for STEP (and STL) models next to the chat.", "category": "design" }
+  ]
+}
