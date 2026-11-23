@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Konstrukční plátno</title>
+<style>
+/* same palette and controls as viewer.html / sketch.html (Claude dark + light) */
+:root{
+  --bg:#1f1e1d;--bg2:#262624;--panel:#2a2927;--panel2:#33322f;--hov:#3a3936;--line:#3d3c38;--line2:#4d4b46;
+  --text:#faf9f5;--dim:#c2c0b6;--faint:#8e8c84;--accent:#d97757;--accent-h:#c6613f;--accent-bg:rgba(217,119,87,.16);--on:#f3c2ae;
+  --accent2:#7fa7d6;--ok:#7cbf8a;--warn:#e3a957;--bad:#e5655a;--shadow:rgba(0,0,0,.5);
+  --r:10px;--fs:12.5px;color-scheme:dark
+}
+@media (prefers-color-scheme:light){:root:not([data-theme=dark]){
+  --bg:#faf9f5;--bg2:#f0eee6;--panel:#ffffff;--panel2:#f5f4ee;--hov:#ecebe4;--line:#e3e1d8;--line2:#cfccc1;
+  --text:#1f1e1d;--dim:#5e5d59;--faint:#8e8c84;--accent-bg:rgba(217,119,87,.14);--on:#b5502f;--shadow:rgba(0,0,0,.18);color-scheme:light}}
+:root[data-theme=light]{
+  --bg:#faf9f5;--bg2:#f0eee6;--panel:#ffffff;--panel2:#f5f4ee;--hov:#ecebe4;--line:#e3e1d8;--line2:#cfccc1;
+  --text:#1f1e1d;--dim:#5e5d59;--faint:#8e8c84;--accent-bg:rgba(217,119,87,.14);--on:#b5502f;--shadow:rgba(0,0,0,.18);color-scheme:light}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:var(--fs)/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden;
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+button,input,select,textarea{font:inherit;color:inherit}
+button{background:transparent;border:1px solid transparent;border-radius:7px;padding:4px 8px;cursor:pointer;white-space:nowrap;color:var(--text);display:inline-flex;align-items:center;gap:5px}
+button:hover:not(:disabled){background:var(--hov)}
+button.on{background:var(--accent-bg);border-color:rgba(217,119,87,.55);color:var(--on)}
+button.primary{background:var(--accent);color:#fff;font-weight:600}
+button.primary:hover:not(:disabled){background:var(--accent-h)}
+button.ghost{border-color:var(--line)}
+button.danger{color:var(--bad)}
+button:disabled{opacity:.4;cursor:default}
+button.icon{padding:4px 6px;min-width:28px;justify-content:center}
+button svg{width:15px;height:15px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+input[type=checkbox],input[type=radio],input[type=range]{accent-color:var(--accent)}
+input[type=number],input[type=text],select,textarea.in{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 6px;-webkit-user-select:text;user-select:text;min-width:0}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
+kbd{font:11px ui-monospace,Consolas,monospace;background:var(--bg2);border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 4px;color:var(--dim)}
+#app{position:fixed;inset:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;grid-template-columns:minmax(0,1fr)}
+/* one row of named groups; scrolls sideways instead of wrapping when the window is narrow */
+#bar{position:relative;z-index:40;display:flex;flex-wrap:wrap;row-gap:2px;align-items:flex-end;padding:3px 6px 4px;background:var(--panel);border-bottom:1px solid var(--line)}
+#bar .grp{display:flex;flex-direction:column;flex:none;padding:0 5px;border-right:1px solid var(--line)}
+#bar .grp:last-child{border-right:0}
+#bar .cap{font-size:9.5px;line-height:1.3;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);padding:0 3px 1px;white-space:nowrap}
+#bar .tb{display:flex;align-items:center;gap:1px}
+#bar .tb button{height:30px;width:32px;padding:0;justify-content:center}
+#bar .tb button.caret{width:16px;color:var(--faint);margin-left:-2px}
+#bar .tb button.wide{width:auto;padding:0 10px}
+#bar .sp{flex:1 0 6px}
+/* page tabs shared by the 3D viewer and the construction canvas: switch in the same window */
+.pages{display:inline-flex;align-items:stretch;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg2);flex:none}
+.pages a{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px;color:var(--dim);text-decoration:none;white-space:nowrap}
+.pages a+a{border-left:1px solid var(--line)}
+.pages a:hover{background:var(--hov);color:var(--text)}
+.pages a.on{background:var(--accent-bg);color:var(--on);font-weight:600}
+.pages svg{width:14px;height:14px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+@media (max-width:700px){.pages a{padding:0 8px}.pages a .t{display:none}}
+
+#bar .grp.pin{border-left:1px solid var(--line)}
+.dd{position:relative}
+.menu{position:fixed;z-index:60;display:none;min-width:240px;max-width:calc(100vw - 16px);max-height:calc(100vh - 70px);overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:10px;box-shadow:0 12px 32px var(--shadow)}
+.menu.open{display:block}
+.menu label{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:6px}
+.menu .row{display:flex;align-items:center;gap:8px;padding:3px 4px}
+.menu .row span{flex:0 0 92px;color:var(--dim)}
+.menu .row input[type=range]{flex:1;min-width:0}
+.menu .lst{display:flex;flex-direction:column;gap:2px}.menu .lst button{justify-content:flex-start;width:100%}
+h4{margin:12px 0 6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600}
+h4:first-child{margin-top:2px}
+.muted{color:var(--faint)}
+.sw{width:18px;height:18px;border-radius:50%;padding:0;border:2px solid transparent;min-width:0;box-shadow:inset 0 0 0 1px var(--line2)}
+.sw.on{border-color:var(--text);background-clip:padding-box}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg2)}
+.seg button{border-radius:0;border:0;padding:3px 9px}
+.seg button.on{background:var(--accent-bg);color:var(--on);border:0}
+#main{display:grid;grid-template-columns:minmax(0,1fr) auto;min-height:0}
+#wrap{position:relative;min-height:0;overflow:hidden}
+#wrap canvas{position:absolute;left:0;top:0;width:100%;height:100%;display:block}
+#top{touch-action:none;cursor:crosshair}
+#ed{position:absolute;display:none;z-index:5;margin:0;padding:0;border:1px dashed var(--accent);border-radius:3px;background:transparent;outline:none;resize:none;overflow:hidden;
+  white-space:pre;line-height:1.25;min-width:2em;-webkit-user-select:text;user-select:text;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+#numEd{position:absolute;display:none;z-index:6;width:90px;border-color:var(--accent)}
+#bubbles{position:absolute;inset:0;pointer-events:none;z-index:6;overflow:hidden}
+.bub{position:absolute;pointer-events:auto;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--accent);
+  color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;box-shadow:0 2px 8px var(--shadow)}
+.bub.warning{background:var(--warn);color:#2a2927}
+.bub.answered,.bub.assumed{background:var(--ok);color:#1f1e1d}
+.bub .card{display:none;position:absolute;left:30px;top:-6px;width:240px;text-align:left;font-weight:400;cursor:default;background:var(--panel);color:var(--text);border:1px solid var(--accent);border-radius:12px;padding:10px;box-shadow:0 10px 30px var(--shadow)}
+.bub.open{z-index:2}.bub.open .card{display:block}
+.bub .card b{display:block;margin-bottom:6px}
+.bub .chips{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+.bub .chips button{border:1px solid var(--line2);padding:1px 8px;border-radius:999px}
+.bub .chips button.on{background:var(--accent-bg);border-color:var(--accent);color:var(--on)}
+.bub .ans{display:flex;gap:4px}.bub .ans input{flex:1}
+.pill{display:inline-block;border-radius:999px;padding:0 8px;font-size:11px;background:var(--accent-bg);color:var(--on)}
+.bub .card .x{position:absolute;right:4px;top:2px;border:0;background:none;padding:0 6px;font-size:16px;line-height:1.2;color:var(--faint);cursor:pointer}
+.bub{touch-action:none}.bub.moved{cursor:grab}
+#aiBar .hd{display:flex;align-items:center;justify-content:center;gap:6px;align-self:center;background:var(--panel);border:1px solid var(--accent);border-radius:999px;padding:0 4px;touch-action:none}
+#aiBar .hd .grip{cursor:grab;color:var(--faint);padding:0 8px;letter-spacing:2px;user-select:none}
+#aiBar .hd button{border:0;background:none;padding:0 6px;font-size:15px;line-height:1.3}
+#aiBar.min .it{display:none}
+#aiBar{position:absolute;left:50%;bottom:10px;transform:translate(calc(-50% + var(--dx,0px)),var(--dy,0px));z-index:9;display:flex;flex-direction:column;gap:6px;max-width:min(680px,calc(100% - 20px));align-items:stretch}
+#aiBar .it{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--accent);border-radius:12px;padding:6px 10px;box-shadow:0 8px 24px var(--shadow)}
+#aiBar .it .t{flex:1;min-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#aiBar .it.done{border-color:var(--line2)}
+#wrap #mini{left:10px;top:auto;bottom:10px;z-index:7;width:150px;height:100px;background:var(--panel);border:1px solid var(--line2);border-radius:8px;opacity:.92;cursor:pointer;display:none}
+#wrap #mini.show{display:block}
+#side{width:clamp(224px,24vw,300px);overflow-y:auto;overflow-x:hidden;background:var(--panel);border-left:1px solid var(--line);padding:10px 12px;font-size:12px}
+#side.hide{display:none}
+#side .f{display:grid;grid-template-columns:78px minmax(0,1fr);gap:4px 8px;align-items:center;margin:3px 0}
+#side .f>span{color:var(--dim)}
+#side .f input[type=number],#side .f select,#side .f input[type=text]{width:100%}
+#side .lay{display:grid;grid-template-columns:18px 24px 24px minmax(0,1fr) auto;gap:2px 4px;align-items:center;padding:3px 0;border-bottom:1px solid var(--line)}
+#side .lay input[type=range]{grid-column:4 / -1;width:100%;min-width:0;margin:0;height:12px}
+#bar .menu .lst button{width:100%;height:auto;justify-content:flex-start;padding:5px 8px;text-align:left}
+#side .lst button{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#side .lay.off .n{opacity:.45;text-decoration:line-through}
+#side .lay button{padding:1px 2px;min-width:0;justify-content:center}
+#side .lay .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#side textarea.in{width:100%;min-height:60px;resize:vertical}
+#side .lst{display:flex;flex-direction:column;gap:2px}
+#side .lst button{justify-content:space-between;width:100%}
+#toast{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--accent);border-radius:9px;padding:7px 12px;display:none;z-index:20;max-width:90%}
+#toast.err{border-color:var(--bad)}
+#chip{position:absolute;z-index:8;display:none}
+#mechs{position:absolute;inset:0;pointer-events:none;z-index:8;overflow:hidden}
+.mp{position:absolute;pointer-events:auto;width:250px;background:var(--panel);border:1px solid var(--line2);border-radius:12px;box-shadow:0 10px 28px var(--shadow);font-size:12px}
+.mp .hd{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 10px;border-bottom:1px solid var(--line);cursor:move;font-weight:600}
+.mp .hd .grow{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mp.min .bd{display:none}.mp.min .hd{border-bottom:0}
+.mp .bd{padding:6px 10px 8px;display:flex;flex-direction:column;gap:4px}
+.mp .r{display:flex;align-items:center;gap:4px}
+.mp .r select{flex:1}
+.mp label{display:grid;grid-template-columns:56px minmax(0,1fr) 42px;align-items:center;gap:6px;color:var(--dim)}
+.mp label input[type=range]{width:100%}
+.mp .err{color:var(--bad)}.mp .err:empty{display:none}.mp .info{color:var(--faint);font-size:11px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 12px 40px var(--shadow)}
+.card h3{margin:0 0 8px;font-size:15px}
+textarea.in{width:100%;min-height:76px;resize:vertical;padding:8px}
+.foot{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:10px}
+.foot .grow{flex:1}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:14px;z-index:50}
+#modal.open{display:flex}
+#modal .card{width:min(920px,100%);max-height:100%;overflow:auto}
+#sendCv{display:block;margin:6px auto;border-radius:8px;border:1px solid var(--line);background:#fff;touch-action:none;cursor:crosshair}
+.snipbar{display:flex;gap:6px;align-items:center}.snipbar .grow{flex:1}
+#modal img{width:100%;max-height:34vh;object-fit:contain;border-radius:8px;border:1px solid var(--line);margin:6px 0;background:#fff}
+#modal .opts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+#modal .opts label{display:flex;flex-direction:column;gap:2px;color:var(--dim)}
+#status{display:flex;gap:14px;min-width:0;align-items:center;padding:3px 10px;background:var(--panel);border-top:1px solid var(--line);color:var(--dim);font-size:11.5px;white-space:nowrap;overflow:hidden}
+#status .sp{flex:1}
+#sync.off{color:var(--bad)}
+#hint{overflow:hidden;text-overflow:ellipsis}
+@media (pointer:coarse){#bar .tb button{height:40px;width:40px}#bar .tb button svg{width:19px;height:19px}}
+@media (max-width:1180px){#bAI .lab{display:none}#bar .tb button.wide{width:32px;padding:0}}
+@media (max-width:980px),(max-height:560px){#bar .cap{display:none}}
+@media (max-width:980px){#bar .tb button{width:28px}#bar .grp{padding:0 3px}}
+@media (max-width:700px){#coords,#count,#hint,#bMini{display:none}#side{width:min(300px,86vw)}}
+@media (max-width:800px){#main{position:relative}#side{position:absolute;right:0;top:0;bottom:0;z-index:30;box-shadow:-8px 0 24px var(--shadow)}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <div class="grp"><span class="cap">Okno</span><div class="tb"><nav class="pages" aria-label="Okno"><a href="/" title="3D model a jeho úpravy"><svg viewBox="0 0 16 16"><path d="M8 1.5l6 3.2v6.6L8 14.5l-6-3.2V4.7z"/><path d="M2 4.7l6 3.3 6-3.3M8 8v6.5"/></svg>3D model</a><a href="/canvas" class="on" title="Konstrukční plátno: náčrty, geometrie, mechanismy"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4 11l3-5 2 3 3-4"/></svg>Plátno</a></nav></div></div>
+    <div class="grp"><span class="cap">Kreslení</span><div class="tb">
+      <button data-tool="pen" title="Pero (P): podrž konec tahu = přesný tvar"><svg viewBox="0 0 16 16"><path d="M2 14l1-4 8-8 3 3-8 8z"/><path d="M9.5 3.5l3 3"/></svg></button>
+      <div class="dd"><button id="bPen" class="caret" title="Nastavení pera, rozpoznávání tvarů a gest">▾</button>
+        <div class="menu" id="menuPen">
+          <h4>Pero</h4>
+          <div class="row"><span>Barva</span><div id="penSw" style="display:flex;gap:4px"></div></div>
+          <div class="row"><span title="V jednotkách plátna: na výkresu vždy stejná">Tloušťka</span><input type="range" id="penW" min="0.5" max="8" step="0.1"></div>
+          <div class="row"><span>Průhlednost</span><input type="range" id="penA" min="0.1" max="1" step="0.05"></div>
+          <div class="row"><span>Vyhlazování</span><input type="range" id="penS" min="0" max="0.8" step="0.05"></div>
+          <h4>Rozpoznání tvaru (QuickShape+)</h4>
+          <label><input type="checkbox" id="qsOn"> Rozpoznat tvar po podržení konce tahu</label>
+          <div class="row"><span>Doba podržení</span><input type="range" id="qsHold" min="250" max="1200" step="50"></div>
+          <div class="row"><span>Citlivost</span><input type="range" id="qsTol" min="0.03" max="0.12" step="0.005"></div>
+          <h4>Gesta a vstup</h4>
+          <label><input type="checkbox" id="scrOn"> Mazání začmáráním</label>
+          <label><input type="checkbox" id="alignOn"> Nabízet srovnání skoro rovných čar</label>
+          <label><input type="checkbox" id="fingerOn"> Kreslit i prstem (jinak prst posouvá a zoomuje)</label>
+        </div></div>
+      <button data-tool="hl" title="Zvýrazňovač (H)"><svg viewBox="0 0 16 16"><path d="M5 11.5l6.5-8 2.5 2.5-8 6.5z"/><path d="M5 11.5l-2.5 2.5h3.5l.5-1"/></svg></button>
+      <button data-tool="eraser" title="Guma (E): smaže celé objekty, přes které přejedeš"><svg viewBox="0 0 16 16"><path d="M6.5 13.5h8"/><path d="M2.5 9.5l6.5-7 4.5 4.5-6.5 6.5H6.5z"/><path d="M5.5 6.5l4.5 4.5"/></svg></button>
+      <button data-tool="text" title="Text (T)"><svg viewBox="0 0 16 16"><path d="M3 3.5h10M8 3.5v10M6 13.5h4"/></svg></button>
+    </div></div>
+    <div class="grp"><span class="cap">Výběr</span><div class="tb">
+      <button data-tool="edit" title="Upravit (V): klikni na tvar, táhni za jeho body nebo ho přesuň"><svg viewBox="0 0 16 16"><path d="M3 2l9 5-4 1.2-1.8 4z"/><circle cx="12.5" cy="12.5" r="1.6"/></svg></button>
+      <button data-tool="lasso" title="Laso (L): obkroužením vybere"><svg viewBox="0 0 16 16"><ellipse cx="8.5" cy="6.5" rx="6" ry="4.2" stroke-dasharray="2.2 2"/><path d="M4.5 10c-1.5 1.5-1 4 1.5 4"/></svg></button>
+      <button data-tool="box" title="Obdélníkový výběr (B)"><svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" stroke-dasharray="2.2 2"/></svg></button>
+    </div></div>
+    <div class="grp"><span class="cap">Geometrie</span><div class="tb">
+      <button data-tool="line" title="Úsečka (1): táhni, nebo klikni dva body"><svg viewBox="0 0 16 16"><path d="M2.5 13.5l11-11"/><circle cx="2.5" cy="13.5" r="1"/><circle cx="13.5" cy="2.5" r="1"/></svg></button>
+      <button data-tool="circle" title="Kružnice (2): střed, pak poloměr"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r=".6"/></svg></button>
+      <button data-tool="arc3" title="Oblouk přes 3 body (3): začátek, konec, bod na oblouku"><svg viewBox="0 0 16 16"><path d="M2.5 12A6.5 6.5 0 0 1 13.5 12"/><circle cx="2.5" cy="12" r="1.2"/><circle cx="8" cy="5.5" r="1.2"/><circle cx="13.5" cy="12" r="1.2"/></svg></button>
+      <button data-tool="arc" title="Oblouk ze středu (O): střed, začátek, konec"><svg viewBox="0 0 16 16"><path d="M2.5 12A6.5 6.5 0 0 1 13.5 12"/><circle cx="8" cy="12" r="1"/><path d="M8 12L12 7" stroke-dasharray="1.5 1.5"/></svg></button>
+      <button data-tool="rect" title="Obdélník (4): dva protilehlé rohy"><svg viewBox="0 0 16 16"><rect x="2" y="3.5" width="12" height="9"/></svg></button>
+      <button data-tool="ellipse" title="Elipsa (5): dva rohy opsaného obdélníku"><svg viewBox="0 0 16 16"><ellipse cx="8" cy="8" rx="6.5" ry="4"/></svg></button>
+      <button id="bCons" title="Konstrukční čáry (C): nové tvary čárkovaně na hladinu Konstrukční prvky"><svg viewBox="0 0 16 16"><path d="M1.5 8h3M6.5 8h3M11.5 8h3"/></svg></button>
+    </div></div>
+    <div class="grp"><span class="cap">Úpravy</span><div class="tb">
+      <button data-tool="trim" title="Trim (X): odstraní úsek mezi průsečíky"><svg viewBox="0 0 16 16"><path d="M2 13L14 3M2 3l5 4M10 9l4 4"/></svg></button>
+      <button data-tool="extend" title="Prodloužit (W): konec čáry k nejbližšímu objektu"><svg viewBox="0 0 16 16"><path d="M2 8h8M10 8l-2-2M10 8l-2 2M14 3v10"/></svg></button>
+      <button data-tool="split" title="Rozdělit (S): rozdělí čáru nebo oblouk v bodě"><svg viewBox="0 0 16 16"><path d="M2 8h5M9 8h5M8 4v8"/></svg></button>
+    </div></div>
+    <div class="grp"><span class="cap">Kóty</span><div class="tb">
+      <button data-tool="dim" title="Kóta (D): klikni na čáru či kružnici (nebo dva body), pak na místo kóty"><svg viewBox="0 0 16 16"><path d="M2 12.5h12M2 10v5M14 10v5M5 6h6M5 6l1.5-1.5M5 6l1.5 1.5M11 6L9.5 4.5M11 6L9.5 7.5"/></svg></button>
+      <button id="bSnap" title="Snap (A): přichytávání ke koncům, středům, průsečíkům (mřížka v menu Zobrazení)"><svg viewBox="0 0 16 16"><path d="M3 3v6a5 5 0 0 0 10 0V3M3 6h3M10 6h3"/></svg></button>
+    </div></div>
+    <div class="grp"><span class="cap">Historie</span><div class="tb">
+      <button id="bUndo" title="Zpět (Ctrl+Z)"><svg viewBox="0 0 16 16"><path d="M5 3L2 6l3 3"/><path d="M2 6h7.5a4 4 0 0 1 0 8H6"/></svg></button>
+      <button id="bRedo" title="Znovu (Ctrl+Shift+Z)"><svg viewBox="0 0 16 16"><path d="M11 3l3 3-3 3"/><path d="M14 6H6.5a4 4 0 0 0 0 8H10"/></svg></button>
+    </div></div>
+    <div class="grp"><span class="cap">AI</span><div class="tb">
+      <button id="bAI" class="primary wide" title="Odeslat do AI (Ctrl+Enter): táhni obdélník přes oblast, pak čmárej do náhledu a napiš komentář"><svg viewBox="0 0 16 16"><path d="M14.5 1.5l-6 13-2-5.5-5-2z"/><path d="M14.5 1.5L6.5 9"/></svg><span class="lab">Odeslat do AI</span></button>
+    </div></div>
+    <span class="sp"></span>
+    <div class="grp pin"><span class="cap">Zobrazení</span><div class="tb">
+      <button id="bFit" title="Zobrazit vše (F)"><svg viewBox="0 0 16 16"><path d="M1.5 5.5v-4h4M10.5 1.5h4v4M14.5 10.5v4h-4M5.5 14.5h-4v-4"/></svg></button>
+      <button id="bMini" title="Minimapa"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11"/><rect x="8" y="7" width="5" height="5"/></svg></button>
+      <div class="dd"><button id="bView" title="Vzhled plátna: pozadí, mřížka, osy, motiv"><svg viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="13" height="13" rx="1.5"/><path d="M1.5 6h13M1.5 10.5h13M6 1.5v13M10.5 1.5v13"/></svg></button>
+        <div class="menu" id="menuView">
+          <h4>Pozadí plátna</h4>
+          <div class="seg" id="bgSeg" style="display:flex"><button data-bg="none" style="flex:1">Čisté</button><button data-bg="dots" style="flex:1">Tečky</button><button data-bg="grid" style="flex:1">Mřížka</button><button data-bg="dark" style="flex:1">Tmavé</button></div>
+          <div class="row"><span>Intenzita mřížky</span><input type="range" id="gridI" min="0.2" max="1" step="0.05"></div>
+          <label><input type="checkbox" id="axesOn"> Souřadné osy</label>
+          <label><input type="checkbox" id="snapGrid"> Snap přichytává i k mřížce</label>
+          <h4>Motiv</h4>
+          <div class="seg" id="themeSeg" style="display:flex"><button data-th="auto" style="flex:1">Auto</button><button data-th="light" style="flex:1">Světlý</button><button data-th="dark" style="flex:1">Tmavý</button></div>
+          <div class="muted" style="padding:6px 4px 0">Kolečko: zoom ke kurzoru · prostřední tlačítko nebo mezerník: posun · Q: předchozí nástroj</div>
+        </div>
+      </div>
+      <div class="dd"><button id="bFile" title="Soubor: uložit, otevřít, exportovat (PNG, SVG, DXF)"><svg viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3M8 12V7M5.8 9.2L8 7l2.2 2.2"/></svg></button>
+        <div class="menu" id="menuFile">
+          <h4>Soubor plátna (.platno.json)</h4>
+          <div class="lst"><button id="fSave">Uložit do souboru…</button><button id="fOpen">Otevřít soubor (nahradí plátno)…</button><button id="fAdd">Vložit ze souboru (přidá k plátnu)…</button></div>
+          <div class="muted" style="padding:4px">Soubor pošlete komukoli s pluginem cad-preview, otevře ho tady v plátně a může pokračovat.</div>
+          <h4>Export</h4>
+          <div class="lst"><button id="fPng">Obrázek PNG</button><button id="fSvg">Vektor SVG</button><button id="fDxf">CAD výkres DXF (mm)</button></div>
+          <div class="muted" style="padding:4px">Exportuje se viditelné: čáry, kružnice, oblouky, tvary, text a čmáranice. Kóty a mechanismy ne.</div>
+        </div>
+      </div>
+      <button id="bSide" class="on" title="Pravý panel (vlastnosti, hladiny)"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11"/><path d="M10 2.5v11"/></svg></button>
+    </div></div>
+  </div>
+  <div id="main">
+    <div id="wrap">
+      <canvas id="base"></canvas>
+      <canvas id="top"></canvas>
+      <textarea id="ed" spellcheck="false"></textarea>
+      <input id="numEd" type="number" step="any">
+      <div id="mechs"></div>
+      <div id="bubbles"></div>
+      <canvas id="mini" width="300" height="200"></canvas>
+      <div id="chip"></div>
+      <div id="aiBar"></div>
+      <div id="toast"></div>
+    </div>
+    <aside id="side"></aside>
+  </div>
+  <div id="status"><span id="zoom" title="Zoom (klik: 100 %)" style="cursor:pointer">100 %</span><span id="sync">připojování…</span><span id="coords"></span><span id="tool" style="color:var(--text)"></span><span id="hint"></span><span class="sp"></span><span id="count"></span></div>
+</div>
+<div id="modal"><div class="card">
+  <h3>Odeslat do AI ✦</h3>
+  <div class="snipbar"><span class="muted">✎ Čmárej do náhledu, na co má AI koukat</span><span class="grow"></span><button class="ghost" id="inkUndo">Zpět</button><button class="ghost" id="inkClear">Vymazat čmáranice</button></div>
+  <canvas id="sendCv"></canvas>
+  <textarea id="sendText" class="in" placeholder="Komentář: co má AI udělat? např. „Překresli tento hřídel do čistého řezu a doplň kóty“"></textarea>
+  <div class="opts">
+    <label>Kontext<select id="sendCtx"><option value="selection">Pouze oblast</option><option value="around">Oblast s okolím</option><option value="page">Širší část plátna</option></select></label>
+    <label>Autonomie AI<select id="sendAut"><option value="consult">Konzultace (nic nemění)</option><option value="propose">Návrh ke schválení</option><option value="direct">Přímá úprava ve výběru</option></select></label>
+  </div>
+  <div class="foot"><span class="grow muted" id="sendInfo"></span><button class="ghost" id="sendCancel">Zrušit</button><button class="primary" id="sendGo">Přidat do chatu</button></div>
+</div></div>
+<script src="/ink.js"></script>
+<script src="/geo.js"></script>
+<script type="module" src="/canvas.js"></script>
+<script src="/lib.js"></script>
+</body>
+</html>

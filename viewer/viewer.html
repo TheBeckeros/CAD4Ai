@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CAD Preview</title>
+<style>
+/* Claude dark palette */
+:root{
+  --bg:#1f1e1d;--bg2:#262624;--panel:#2a2927;--panel2:#33322f;--hov:#3a3936;--line:#3d3c38;--line2:#4d4b46;
+  --text:#faf9f5;--dim:#c2c0b6;--faint:#8e8c84;--accent:#d97757;--accent-h:#c6613f;--accent-bg:rgba(217,119,87,.16);
+  --accent2:#7fa7d6;--ok:#7cbf8a;--warn:#e3a957;--bad:#e5655a;
+  --r:10px;--fs:12.5px
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:var(--fs)/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+button{background:transparent;border:1px solid transparent;border-radius:7px;padding:4px 9px;cursor:pointer;white-space:nowrap;color:var(--text);display:inline-flex;align-items:center;gap:5px}
+button:hover:not(:disabled){background:var(--hov)}
+button.on{background:var(--accent-bg);border-color:rgba(217,119,87,.55);color:#f3c2ae}
+button.primary{background:var(--accent);color:#fff;font-weight:600}
+button.primary:hover:not(:disabled){background:var(--accent-h)}
+button.ghost{border-color:var(--line)}
+button.danger{color:var(--bad)}
+button:disabled{opacity:.4;cursor:default}
+button.icon{padding:4px 6px;min-width:28px;justify-content:center}
+button svg{width:15px;height:15px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+select,input[type=number],input[type=text]{background:var(--bg2);border:1px solid var(--line);border-radius:7px;padding:3px 6px}
+input[type=number]{width:72px}
+input[type=range]{accent-color:var(--accent);width:100%}
+input[type=checkbox],input[type=radio]{accent-color:var(--accent)}
+input[type=color]{width:26px;height:22px;padding:0;border:1px solid var(--line);border-radius:5px;background:none}
+kbd{font:11px ui-monospace,Consolas,monospace;background:var(--bg2);border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 4px;color:var(--dim)}
+#app{display:grid;grid-template-rows:auto 1fr auto;grid-template-columns:minmax(0,1fr);height:100%}
+#bar{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:6px 8px;background:var(--panel);border-bottom:1px solid var(--line)}
+#bar .grp{display:flex;align-items:center;gap:2px;padding:0 6px 0 2px;border-right:1px solid var(--line)}
+#bar .grp:last-child{border-right:0}
+#bar .sp{flex:1}
+/* page tabs shared by the 3D viewer and the construction canvas: switch in the same window */
+.pages{display:inline-flex;align-items:stretch;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg2);flex:none}
+.pages a{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px;color:var(--dim);text-decoration:none;white-space:nowrap}
+.pages a+a{border-left:1px solid var(--line)}
+.pages a:hover{background:var(--hov);color:var(--text)}
+.pages a.on{background:var(--accent-bg);color:var(--on);font-weight:600}
+.pages svg{width:14px;height:14px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+
+/* toolbar in the same layout as the construction canvas: captioned groups, one row of icon buttons each */
+#bar{align-items:flex-end;gap:0;row-gap:2px;padding:3px 6px 4px}
+#bar .grp{flex-direction:column;align-items:stretch;gap:0;padding:0 5px;border-right:1px solid var(--line)}
+#bar .grp.end{border-right:0;border-left:1px solid var(--line)}
+#bar .cap{font-size:9.5px;line-height:1.3;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);padding:0 3px 1px;white-space:nowrap}
+#bar .tb{display:flex;align-items:center;gap:2px;min-height:30px}
+@media (max-width:980px),(max-height:560px){#bar .cap{display:none}}
+.ctx{display:none;align-items:center;gap:4px}.ctx.on{display:flex}
+.sw{width:18px;height:18px;border-radius:50%;padding:0;border:2px solid transparent;min-width:0}
+.sw.on{border-color:var(--text)}
+.dd{position:relative}
+.menu{position:absolute;top:calc(100% + 6px);left:0;z-index:40;display:none;min-width:220px;background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:8px;box-shadow:0 12px 32px rgba(0,0,0,.5)}
+.menu.open{display:block}
+.menu h4:first-child{margin-top:0}
+.menu label.ck{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:6px;cursor:pointer}
+.menu label.ck:hover{background:var(--hov)}
+.menu label.ck kbd{margin-left:auto}
+.vgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
+.vgrid button{justify-content:center;border-color:var(--line);padding:4px 2px}
+#main{position:relative;display:flex;min-height:0}
+#view{position:relative;flex:1;min-width:0}
+#view canvas{display:block;position:absolute;left:0;top:0}
+#overlay,#title,#hint,#legend{z-index:3}
+#side{width:310px;flex:none;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+#side.hidden{display:none}
+#pside{width:320px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+#pside.hidden{display:none}
+#pbody{flex:1;overflow:auto;padding:8px 12px 14px}
+.pico{position:relative;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;min-width:0;border:1px solid transparent;border-radius:6px;background:none;color:var(--faint);cursor:pointer;flex:none;transition:background .12s,color .12s,border-color .12s}
+.pico:hover{background:var(--hov);color:var(--text)}
+.pico.on{color:var(--on)}
+.pico.act{color:var(--on)}
+.pico.off{color:var(--faint);opacity:.6}
+.pico svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.pico:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.swc{width:14px;height:14px;border-radius:4px;border:1px solid rgba(255,255,255,.22);box-shadow:inset 0 0 0 1px rgba(0,0,0,.25)}
+.prow{display:flex;align-items:center;gap:2px;flex-wrap:nowrap;min-width:0;margin:0}
+.prow .t{min-width:0;font-weight:600;padding:0 4px}
+.prow .grow{flex:1}
+.prow .txt{height:24px;padding:0 7px;font-size:11.5px;border-radius:6px;color:var(--dim);border-color:transparent;background:none}
+.prow .txt:hover{background:var(--hov);color:var(--text)}
+#pbody .alpha{display:flex;align-items:center;gap:8px;margin:6px 0 4px;padding:7px 9px;border:1px solid var(--line);border-radius:var(--r);background:var(--bg2)}
+#pbody .alpha label{color:var(--dim);white-space:nowrap}
+#partsAlphaV{min-width:42px;text-align:right}
+.pop{position:fixed;z-index:60;min-width:200px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:5px;box-shadow:0 14px 36px rgba(0,0,0,.55)}
+.pop .it{display:flex;align-items:center;gap:8px;padding:6px 10px 6px 6px;border-radius:6px;cursor:pointer;font-size:12.5px;color:var(--text);white-space:nowrap}
+.pop .it:hover{background:var(--hov)}
+.pop .ck{width:14px;height:14px;display:inline-flex;flex:none;color:var(--accent)}
+.pop .ck svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.pop .sep{height:1px;background:var(--line);margin:5px 2px}
+.swatches{display:grid;grid-template-columns:repeat(6,22px);gap:6px;padding:6px}
+.swatches i{width:22px;height:22px;border-radius:6px;cursor:pointer;border:1px solid rgba(255,255,255,.14);box-sizing:border-box;transition:transform .1s}
+.swatches i:hover{transform:scale(1.08)}
+.swatches i.on{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--text)}
+#tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:2px;padding:6px;border-bottom:1px solid var(--line)}
+#tabs button{font-size:11.5px;padding:4px 2px;justify-content:center;color:var(--dim)}
+#tabs button.on{color:#f3c2ae}
+#tabs button .n{display:inline-block;min-width:15px;padding:0 4px;border-radius:8px;background:var(--line2);font-size:10px;color:var(--text)}
+#tabs{grid-template-columns:repeat(3,1fr);gap:3px}
+#tabs button{flex-direction:column;gap:2px;padding:6px 2px 5px;font-size:11px;border-color:var(--line)}
+#tabs button svg{width:16px;height:16px}
+#tabs button.on{border-color:rgba(217,119,87,.55)}
+#tabbody{flex:1;overflow:auto;padding:8px 12px 14px}
+.tab{display:none}.tab.on{display:block}
+h4{margin:14px 0 6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600}
+h4:first-child{margin-top:4px}
+.row{display:flex;align-items:center;gap:6px;margin:5px 0;flex-wrap:wrap}
+.row label{color:var(--dim)}
+.row .grow{flex:1}
+.item{border:1px solid var(--line);border-radius:var(--r);padding:7px 9px;margin:6px 0;background:var(--bg2)}
+.item.sel{border-color:var(--accent)}
+.item .t{font-weight:600}
+.item.xs{cursor:pointer}.item.xs.done{opacity:.6}.item.xs.locked{border-color:var(--bad)}
+.item .car{padding:0 3px;min-width:16px;color:var(--faint);transition:transform .12s}
+.item.open .car{transform:rotate(90deg)}
+.item .props{display:none}.item.open .props{display:block}
+.item .t.tog{cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .d{color:var(--dim);font-size:12px;word-break:break-word}
+.item .acts{display:flex;gap:2px;flex-wrap:wrap;margin-top:3px}
+.muted{color:var(--faint)}
+.d{font-size:12px}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg2)}
+.seg button{border-radius:0;border:0;padding:3px 9px}
+.seg button.on{background:var(--accent-bg);color:#f3c2ae;border:0}
+.param{display:grid;grid-template-columns:1fr auto;gap:2px 8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)}
+.param .nm{font-weight:600}
+.param .cm{grid-column:1/3;color:var(--dim);font-size:11.5px}
+.param input[type=range]{grid-column:1/3}
+.param.changed .nm{color:var(--accent)}
+.log{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:6px;max-height:160px;overflow:auto;font:11.5px ui-monospace,Consolas,monospace}
+.log.err{border-color:var(--bad);color:#ffb8b0}
+.badge{display:inline-block;padding:0 7px;border-radius:9px;font-size:11px;background:var(--line2)}
+.badge.open{background:#5a3f22;color:#f6cf98}.badge.done{background:#23452c;color:#ace7b8}.badge.hidden{background:#3a3936;color:#b5b3aa}.badge.bad{background:#5a2621;color:#ffb8b0}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px}
+.kv span:nth-child(odd){color:var(--faint)}
+#status{display:flex;gap:12px;align-items:center;padding:3px 10px;background:var(--panel);border-top:1px solid var(--line);color:var(--dim);font-size:11.5px;white-space:nowrap;overflow:hidden}
+#status .sp{flex:1}
+#status button{padding:0 6px;font-size:11.5px;color:var(--dim)}
+#hover{overflow:hidden;text-overflow:ellipsis}
+#overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);pointer-events:none;text-align:center;padding:20px}
+#title{position:absolute;top:10px;left:12px;pointer-events:none;text-shadow:0 1px 2px #000}
+#title b{font-size:13.5px}
+#title .d{color:var(--dim);font-size:11.5px}
+#hint{position:absolute;left:12px;bottom:9px;color:var(--faint);font-size:11.5px;pointer-events:none;text-shadow:0 1px 2px #000;max-width:calc(100% - 260px)}
+#legend{position:absolute;right:12px;bottom:10px;display:none;background:rgba(42,41,39,.92);border:1px solid var(--line2);border-radius:10px;padding:7px 9px;font-size:11.5px;pointer-events:none;max-width:230px}
+#legend.on{display:block}
+#legend .t{font-weight:600;margin-bottom:3px}
+#legend .k{display:flex;align-items:center;gap:6px;color:var(--dim)}
+#legend .k i{width:12px;height:12px;border-radius:3px;flex:none}
+#toast{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--accent);border-radius:9px;padding:7px 12px;display:none;z-index:20;max-width:90%}
+#toast.err{border-color:var(--bad)}
+#modal,#help{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:14px;z-index:50}
+#modal.open,#help.open{display:flex}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;width:min(500px,100%);max-height:100%;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.card h3{margin:0 0 8px;font-size:15px}
+.card img{width:100%;border-radius:8px;border:1px solid var(--line);margin:6px 0;background:var(--bg)}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;align-items:center}
+.keys span{color:var(--dim)}
+textarea{width:100%;min-height:84px;resize:vertical;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px}
+textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.inc label{display:flex;gap:6px;align-items:flex-start;margin:3px 0;color:var(--text)}
+.inc .d{color:var(--dim);font-size:12px}
+.foot{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+.lbl{padding:2px 6px;border-radius:5px;background:rgba(31,30,29,.9);border:1px solid var(--accent2);color:#fff;font:11.5px/1.2 ui-monospace,Consolas,monospace;white-space:nowrap;pointer-events:auto;cursor:default}
+.lbl.sel{border-color:var(--accent);color:#f3c2ae}
+.lbl.meas{padding:3px 8px;background:#1f1e1d;font-size:13.5px;font-weight:600;pointer-events:none}
+.lbl.mark{border-color:#e0b050;cursor:grab;max-width:240px;overflow:hidden;text-overflow:ellipsis}
+.lbl.mark.sel{border-color:var(--accent)}
+.lbl.mark input{width:170px;padding:1px 4px;font:inherit}
+.lbl.mark .mx{padding:0 5px;margin-left:3px;min-height:0;line-height:1.2}
+.mh{width:12px;height:12px;border-radius:50%;border:2px solid #e0b050;background:rgba(31,30,29,.6);cursor:grab;pointer-events:auto}
+.pin{width:22px;height:22px;border-radius:50% 50% 50% 0;transform:translate(0,-11px) rotate(-45deg);display:flex;align-items:center;justify-content:center;border:2px solid #fff;cursor:pointer;pointer-events:auto;box-shadow:0 2px 6px rgba(0,0,0,.6)}
+.pin span{transform:rotate(45deg);font:700 11px system-ui;color:#111}
+.pin.open{background:var(--warn)}.pin.done{background:var(--ok)}.pin.active{outline:3px solid var(--accent2)}
+#pinpop{position:absolute;display:none;z-index:15;width:250px;background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:9px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+#pinpop .c{margin:4px 0 6px;word-break:break-word}
+#pinpop .mi{display:flex;width:100%;justify-content:flex-start}
+#pinpop .mi kbd{margin-left:auto}
+#variants{position:absolute;bottom:34px;left:50%;transform:translateX(-50%);z-index:4;display:none;align-items:center;gap:6px;background:rgba(42,41,39,.92);border:1px solid var(--line2);border-radius:10px;padding:4px 6px;max-width:calc(100% - 24px);overflow-x:auto;white-space:nowrap}
+#variants.on{display:flex}
+#variants .seg button{padding:3px 10px}
+.fmt{display:flex;width:100%;justify-content:flex-start}
+.fmt .muted{margin-left:auto;font-size:11px}
+#loading{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(31,30,29,.6);z-index:10;color:var(--text)}
+#loading.on{display:flex}
+@media (max-width:640px){
+  #side{position:absolute;right:0;top:0;bottom:0;z-index:12;box-shadow:-8px 0 20px rgba(0,0,0,.4);width:min(310px,88%)}
+  #bar .lab{display:none}
+  #pside{position:absolute;left:0;top:0;bottom:0;z-index:12;box-shadow:8px 0 20px rgba(0,0,0,.4);width:min(300px,88%)}
+}
+</style>
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+  "three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.7.6/build/index.module.js"
+}}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/occt-import-js.js"></script>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <div class="grp"><span class="cap">Window</span><div class="tb"><nav class="pages" aria-label="Okno"><a href="/" class="on" title="3D model a jeho úpravy"><svg viewBox="0 0 16 16"><path d="M8 1.5l6 3.2v6.6L8 14.5l-6-3.2V4.7z"/><path d="M2 4.7l6 3.3 6-3.3M8 8v6.5"/></svg>3D model</a><a href="/canvas" title="Konstrukční plátno: náčrty, geometrie, mechanismy"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4 11l3-5 2 3 3-4"/></svg>Plátno</a></nav></div></div>
+    <div class="grp"><span class="cap">Tools</span><div class="tb">
+      <button id="tSelect" class="on" title="Select faces, edges, vertices or parts (S) · Shift adds"><svg viewBox="0 0 16 16"><path d="M3 2l9 5-4 1-2 4z"/></svg><span class="lab">Select</span></button>
+      <button id="tMeasure" title="Measure (M)"><svg viewBox="0 0 16 16"><path d="M1.5 10.5l9-9 4 4-9 9z"/><path d="M5 7l1.5 1.5M7 5l1.5 1.5M9 3l1.5 1.5"/></svg><span class="lab">Measure</span></button>
+      <button id="tPen" title="Draw over the view (D)"><svg viewBox="0 0 16 16"><path d="M2 14l1-4 8-8 3 3-8 8z"/><path d="M9.5 3.5l3 3"/></svg><span class="lab">Draw</span></button>
+      <button id="tMark" title="Markers with a note: point, line A–B, area (K)"><svg viewBox="0 0 16 16"><path d="M8 14.5s-4.5-4.6-4.5-8a4.5 4.5 0 0 1 9 0c0 3.4-4.5 8-4.5 8z"/><circle cx="8" cy="6.5" r="1.6"/></svg><span class="lab">Markers</span></button>
+    </div></div>
+    <div class="grp" id="ctxGrp"><span class="cap">Options</span><div class="tb">
+      <span class="ctx" id="ctxSelect"><select id="selFilter" title="What to select">
+        <option value="auto">Auto</option><option value="face">Face</option><option value="edge">Edge</option>
+        <option value="vertex">Vertex</option><option value="part">Part</option>
+      </select></span>
+      <span class="ctx" id="ctxMeasure"><select id="measMode" title="Measurement mode">
+        <option value="auto">Auto</option><option value="pp">Point–point</option><option value="angle">Angle</option><option value="dia">Ø / R</option>
+      </select></span>
+      <span class="ctx" id="ctxPen">
+        <button class="sw on" data-c="#ff3b30" style="background:#ff3b30" title="Red"></button>
+        <button class="sw" data-c="#ffd60a" style="background:#ffd60a" title="Yellow"></button>
+        <button class="sw" data-c="#32d2ff" style="background:#32d2ff" title="Blue"></button>
+        <button class="sw" data-c="#ffffff" style="background:#ffffff" title="White"></button>
+      </span>
+      <span class="ctx" id="ctxMark"><select id="markType" title="Marker type">
+        <option value="point">Point</option><option value="line">Line A–B</option><option value="area">Area</option>
+      </select></span>
+    </div></div>
+    <div class="grp"><span class="cap">View &amp; export</span><div class="tb">
+      <div class="dd"><button id="bViewMenu" title="Standard and saved views"><svg viewBox="0 0 16 16"><path d="M8 1.5l6 3.2v6.6L8 14.5l-6-3.2V4.7z"/><path d="M2 4.7l6 3.3 6-3.3M8 8v6.5"/></svg><span class="lab">View</span> ▾</button>
+        <div class="menu" id="menuView" style="width:260px">
+          <h4>Standard</h4>
+          <div class="vgrid">
+            <button data-v="iso" title="1">Iso</button><button data-v="front" title="2">Front</button><button data-v="top" title="3">Top</button><button data-v="right" title="4">Right</button>
+            <button data-v="back">Back</button><button data-v="left">Left</button><button data-v="bottom">Bottom</button><button data-v="normal" title="Normal to the selected face (N over a face)">Normal</button>
+          </div>
+          <h4>Saved views <span class="muted" style="text-transform:none;letter-spacing:0">· camera + visibility</span></h4>
+          <div id="savedViews"></div>
+          <div class="row"><input type="text" id="svName" placeholder="Name" class="grow" style="width:auto;flex:1"><button id="svSave" class="primary">Save</button></div>
+        </div>
+      </div>
+      <button id="bOrtho" title="Orthographic / perspective (P)">Ortho</button>
+      <button id="bFit" class="icon" title="Fit model (F)"><svg viewBox="0 0 16 16"><path d="M1.5 5.5v-4h4M10.5 1.5h4v4M14.5 10.5v4h-4M5.5 14.5h-4v-4"/></svg></button>
+      <div class="dd"><button id="bDispMenu" title="Display and look"><svg viewBox="0 0 16 16"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2"/></svg><span class="lab">Display</span> ▾</button>
+        <div class="menu" id="menuDisp" style="width:240px">
+          <h4>Look</h4>
+          <div class="seg" id="lookSeg" style="display:flex"><button data-l="shaded" class="on" style="flex:1">Shaded</button><button data-l="matcap" style="flex:1">Matcap</button><button data-l="xray" style="flex:1">X-ray</button></div>
+          <h4>Show</h4>
+          <label class="ck"><input type="checkbox" id="dEdges" checked> Edges</label>
+          <label class="ck"><input type="checkbox" id="dWire"> Wireframe</label>
+          <label class="ck"><input type="checkbox" id="dShadow"> Shadows</label>
+          <label class="ck"><input type="checkbox" id="dAO"> Ambient occlusion</label>
+          <label class="ck"><input type="checkbox" id="dGrid" checked> Grid</label>
+          <label class="ck"><input type="checkbox" id="dAxes"> Axes</label>
+          <label class="ck"><input type="checkbox" id="dCube" checked> View cube</label>
+        </div>
+      </div>
+      <div class="dd"><button id="bExportMenu" title="Export the model to another 3D format (Save as…)"><svg viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5"/><path d="M2 11v3h12v-3"/></svg><span class="lab">Export</span> ▾</button>
+        <div class="menu" id="menuExport" style="width:290px">
+          <h4>Mesh quality</h4>
+          <div class="seg" id="expQuality" style="display:flex"><button data-q="coarse" style="flex:1">Coarse</button><button data-q="normal" class="on" style="flex:1">Normal</button><button data-q="fine" style="flex:1">Fine</button></div>
+          <h4>Save as…</h4>
+          <div id="expList" class="muted">Loading…</div>
+        </div>
+      </div>
+      <button id="bShot" class="icon" title="Save a PNG screenshot"><svg viewBox="0 0 16 16"><path d="M1.5 5h3l1.5-2h4l1.5 2h3v8.5h-13z"/><circle cx="8" cy="9" r="2.5"/></svg></button>
+    </div></div>
+    <div class="grp"><span class="cap">Edit</span><div class="tb">
+      <button id="bUndo" class="icon" title="Undo last stroke (Ctrl+Z)"><svg viewBox="0 0 16 16"><path d="M5 3L2 6l3 3"/><path d="M2 6h7.5a4 4 0 0 1 0 8H6"/></svg></button>
+      <button id="bClear" class="icon" title="Clear drawing and selection"><svg viewBox="0 0 16 16"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.8 10h6.4L12 4"/></svg></button>
+    </div></div>
+    <div class="grp"><span class="cap">Claude</span><div class="tb">
+      <button id="bNote" class="primary" title="Create a note for Claude (Enter)">Note for Claude</button>
+      <button id="bMarkSend" class="primary" style="display:none" title="Send all markers and their notes to the chat as one message">Odeslat vše do chatu</button>
+    </div></div>
+    <span class="sp"></span>
+    <div class="grp end"><span class="cap">Panel</span><div class="tb">
+      <button id="bParts" class="icon" title="Parts panel (left)"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M5.5 2.5v11"/></svg></button>
+      <button id="bSide" class="icon" title="Side panel"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M10 2.5v11"/></svg></button>
+    </div></div>
+  </div>
+  <div id="main">
+    <div id="pside">
+      <div id="pbody">
+        <!-- PARTS (left panel) -->
+        <div id="tab-parts">
+          <div class="row"><button id="partsShowAll" class="ghost">Show all</button><button id="partsReset" class="ghost">Default colours</button></div>
+          <div class="alpha"><label for="partsAlpha">Transparency</label><input type="range" id="partsAlpha" min="0" max="90" step="1" value="60" class="grow" style="width:auto;flex:1"><span id="partsAlphaV" class="mono">60 %</span></div>
+          <div class="row"><input type="text" id="partsFilter" placeholder="Filter parts…" style="width:auto;flex:1;min-width:0"><button id="partsExpand" class="ghost icon" title="Expand all part properties">⊞</button><button id="partsCollapse" class="ghost icon" title="Collapse all part properties">⊟</button></div>
+          <div class="d muted">Right-click a part in the view, or hover it and press <kbd>H</kbd> hide · <kbd>T</kbd> transparent · <kbd>I</kbd> isolate.</div>
+          <div id="partList"></div>
+          <h4>Exploded view</h4>
+          <div class="seg" id="xMode" style="display:flex;margin-bottom:4px"><button data-m="radial" class="on" style="flex:1">Radial</button><button data-m="dis" style="flex:1" title="Step-by-step disassembly planned by Claude">Disassembly</button><button data-m="asm" style="flex:1" title="The same plan backwards: assembly sequence">Assembly</button></div>
+          <div id="xRadial"><div class="row"><input type="range" id="explode" min="0" max="1.5" step="0.01" value="0" class="grow" style="width:auto"><span id="explodeV" class="mono">0 %</span></div></div>
+          <div id="xPlan" style="display:none">
+            <div id="xEmpty">
+              <div class="d muted">No plan yet. Claude checks which part can slide out in which direction, finds the disassembly order (Assembly plays it backwards), and flags parts that cannot be taken apart or put together.</div>
+              <div class="row"><input type="text" id="xFocus" placeholder="Focus (optional), e.g. servicing the piston" style="width:auto;flex:1;min-width:0"></div>
+              <div class="row"><button id="xCreate" class="primary">Plan disassembly</button></div>
+            </div>
+            <div id="xBody" style="display:none">
+              <div id="xWarn" class="d" style="color:var(--bad)"></div>
+              <div class="row"><button id="xPlay" class="primary">▶ Play</button><input type="range" id="xT" min="0" max="1" step="0.001" value="0" style="width:auto;flex:1"><span id="xTV" class="mono">0/0</span></div>
+              <div class="row"><label><input type="checkbox" id="xTrails"> Trail lines</label><span class="grow"></span><button id="xRedo" class="ghost" title="Ask Claude for a new plan">Re-plan</button></div>
+              <div id="xSteps"></div>
+            </div>
+          </div>
+          <h4>Model</h4>
+          <div id="modelInfo" class="d muted"></div>
+        </div>
+      </div>
+    </div>
+    <div id="view">
+      <div id="overlay">Waiting for a model…<br>As soon as Claude exports a .step file, it shows up here.</div>
+      <div id="title"></div>
+      <div id="hint"></div>
+      <div id="legend"></div>
+      <div id="toast"></div>
+      <div id="pinpop"></div>
+      <div id="variants"><span class="muted">Variant</span><span class="seg" id="varSeg"></span><button id="varChoose" class="primary" title="Tell Claude this is the variant to continue with">Choose</button></div>
+      <div id="loading">Loading model…</div>
+    </div>
+    <div id="side">
+      <div id="tabs">
+
+        <button data-tab="sel" class="on"><svg viewBox="0 0 16 16"><path d="M3 2l9 5-4 1.2-1.8 4z"/></svg>Select <span class="n" id="nSel">0</span></button>
+        <button data-tab="meas"><svg viewBox="0 0 16 16"><path d="M1.5 10.5l9-9 4 4-9 9z"/><path d="M5 7l1.5 1.5M7 5l1.5 1.5"/></svg>Measure <span class="n" id="nMeas">0</span></button>
+        <button data-tab="sect"><svg viewBox="0 0 16 16"><path d="M2 13L14 3"/><rect x="2" y="2" width="12" height="12" stroke-dasharray="2 2"/></svg>Section</button>
+        <button data-tab="ana"><svg viewBox="0 0 16 16"><path d="M2 14V2M2 14h12M5 11V8M8 11V5M11 11V7"/></svg>Analyze</button>
+        <button data-tab="notes"><svg viewBox="0 0 16 16"><path d="M3 2.5h10v8H8l-3 3v-3H3z"/></svg>Notes <span class="n" id="nNotes">0</span></button>
+        <button data-tab="vers"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>Versions</button>
+        <button data-tab="params"><svg viewBox="0 0 16 16"><path d="M2 4.5h12M2 11.5h12"/><circle cx="6" cy="4.5" r="1.6"/><circle cx="10.5" cy="11.5" r="1.6"/></svg>Params</button>
+        <button data-tab="motion" id="motionTabBtn" style="display:none"><svg viewBox="0 0 16 16"><path d="M5 3l8 5-8 5z"/></svg>Motion <span class="n" id="nJoints">0</span></button>
+      </div>
+      <div id="tabbody">
+        <!-- SELECTION -->
+        <div class="tab on" id="tab-sel">
+          <h4>Selected features</h4>
+          <div id="selList"><div class="muted">With Select (S) click a face, edge or vertex. Shift adds more.</div></div>
+          <div class="row"><button id="selClear" class="ghost">Clear</button><button id="selFocus" class="ghost">Focus</button><button id="selSection" class="ghost">Section here</button></div>
+          <h4>Drawing</h4>
+          <div id="strokeInfo" class="muted">No strokes.</div>
+        </div>
+        <!-- MEASURE -->
+        <div class="tab" id="tab-meas">
+          <div class="d muted" id="measHelp">Measure (M). Auto: click a hole (Ø), or two features for distance / angle. Point–point snaps to vertices and edges.</div>
+          <div class="row"><label><input type="checkbox" id="measShow" checked> Show dimensions</label><label><input type="checkbox" id="measComp"> ΔX ΔY ΔZ</label></div>
+          <div id="measList"></div>
+          <div class="row"><button id="measClear" class="danger">Delete all</button></div>
+        </div>
+        <!-- SECTION -->
+        <div class="tab" id="tab-sect">
+          <div class="row"><label><input type="checkbox" id="secOn"> <b style="color:var(--text)">Section on</b></label><span class="grow"></span><kbd>X</kbd></div>
+          <h4>Cut by</h4>
+          <div class="row"><span class="seg" id="secAxis">
+            <button data-a="x">X</button><button data-a="y">Y</button><button data-a="z" class="on">Z</button><button data-a="face">Face</button><button data-a="custom">Angle</button><button data-a="box">Box</button>
+          </span></div>
+          <div id="secPlaneCtl">
+            <div id="secCustom" style="display:none">
+              <div class="row"><label style="width:62px">Azimuth</label><input type="range" id="secAz" min="0" max="360" step="1" value="0" class="grow" style="width:auto"><span id="secAzV" class="mono">0°</span></div>
+              <div class="row"><label style="width:62px">Elevation</label><input type="range" id="secEl" min="-90" max="90" step="1" value="90" class="grow" style="width:auto"><span id="secElV" class="mono">90°</span></div>
+            </div>
+            <div class="row"><input type="range" id="secOff" min="0" max="1" step="0.001" value="0.5"></div>
+            <div class="row"><input type="number" id="secOffN" step="0.1"> <span class="muted">mm</span>
+              <button id="secMinus" class="icon ghost">−</button><button id="secPlus" class="icon ghost">+</button>
+              <select id="secStep" title="Step"><option>0.1</option><option selected>1</option><option>5</option></select>
+              <button id="secFlip" class="ghost" title="Flip which side is cut away">⇅ Flip</button></div>
+            <h4>More planes</h4>
+            <div class="d muted">Keep this plane, then move the cut elsewhere: every kept plane cuts too.</div>
+            <div id="secExtra"></div>
+            <div class="row"><button id="secKeep" class="ghost">+ Keep this plane</button></div>
+          </div>
+          <div id="secBoxCtl" style="display:none">
+            <div class="d muted">Only what is inside the box stays.</div>
+            <div id="secBoxRows"></div>
+            <div class="row"><button id="secBoxFit" class="ghost">Fit to visible parts</button><button id="secBoxSel" class="ghost">Fit to selection</button></div>
+          </div>
+          <h4>Display</h4>
+          <div class="row"><label><input type="checkbox" id="secPlane" checked> Plane</label><label><input type="checkbox" id="secOutline" checked> Outline</label>
+            <label><input type="checkbox" id="secCap" checked> Fill</label><input type="color" id="secCapColor" value="#d97757"></div>
+          <div id="secInfo" class="d muted"></div>
+        </div>
+        <!-- ANALYZE -->
+        <div class="tab" id="tab-ana">
+          <h4>Colour map</h4>
+          <div class="seg" id="anaSeg" style="display:flex"><button data-k="" class="on" style="flex:1">Off</button><button data-k="thick" style="flex:1">Wall</button><button data-k="draft" style="flex:1">Draft</button><button data-k="overhang" style="flex:1">Overhang</button></div>
+          <div id="anaThickCtl" class="ana" style="display:none">
+            <div class="row"><label>Minimum wall</label><input type="number" id="anaMinWall" value="1" step="0.1" min="0.01"><span class="muted">mm</span></div>
+          </div>
+          <div id="anaDraftCtl" class="ana" style="display:none">
+            <div class="row"><label>Pull direction</label><select id="anaPull"><option value="0,0,1">+Z</option><option value="0,0,-1">−Z</option><option value="1,0,0">+X</option><option value="-1,0,0">−X</option><option value="0,1,0">+Y</option><option value="0,-1,0">−Y</option></select></div>
+            <div class="row"><label>Minimum draft</label><input type="number" id="anaMinDraft" value="1" step="0.5" min="0"><span class="muted">°</span></div>
+          </div>
+          <div id="anaOverCtl" class="ana" style="display:none">
+            <div class="row"><label>Build direction</label><select id="anaBuild"><option value="0,0,1">+Z</option><option value="0,0,-1">−Z</option><option value="1,0,0">+X</option><option value="-1,0,0">−X</option><option value="0,1,0">+Y</option><option value="0,-1,0">−Y</option></select></div>
+            <div class="row"><label>Critical angle</label><input type="number" id="anaCrit" value="45" step="5" min="0" max="89"><span class="muted">° from vertical</span></div>
+          </div>
+          <div id="anaStats" class="d muted"></div>
+          <h4>Collisions</h4>
+          <div class="row"><button id="colRun" class="ghost">Check now</button><label>tolerance <input type="number" id="colTol" value="0.01" step="0.01" min="0" style="width:60px"> mm</label></div>
+          <div class="row"><label><input type="checkbox" id="colLive"> Live while the mechanism moves</label></div>
+          <div id="colList" class="d muted">Checks every pair of visible parts in the current pose.</div>
+          <h4>Mass properties</h4>
+          <div class="row"><select id="massMat" class="grow"></select><input type="number" id="massRho" step="0.01" min="0.001" title="Density g/cm³" style="width:64px"><span class="muted">g/cm³</span></div>
+          <div class="row"><label><input type="checkbox" id="massCom"> Show centre of mass</label></div>
+          <div id="massOut"></div>
+        </div>
+        <!-- NOTES -->
+        <div class="tab" id="tab-notes">
+          <div class="row"><span class="seg" id="noteFilter"><button data-f="all" class="on">All</button><button data-f="open">Open</button><button data-f="done">Done</button></span>
+            <span class="grow"></span><label><input type="checkbox" id="pinsOn"> Pins</label>
+            <button id="noteClear" title="Move all notes of this model out of the list">Delete all</button></div>
+          <div id="noteList" class="muted">No notes yet.</div>
+        </div>
+        <!-- VERSIONS -->
+        <div class="tab" id="tab-vers">
+          <h4>Compare</h4>
+          <div class="row"><label>Ghost:</label><span id="ghostName" class="muted">none</span><span class="grow"></span><button id="ghostOff" class="ghost">Hide</button></div>
+          <div class="row"><label style="width:62px">Opacity</label><input type="range" id="ghostOp" min="0.05" max="0.8" step="0.01" value="0.3" class="grow" style="width:auto"></div>
+          <div class="row"><label><input type="checkbox" id="diffOn" checked> Highlight changes</label><label>tolerance <input type="number" id="diffTol" value="0.05" step="0.01" style="width:64px"> mm</label></div>
+          <div class="row muted"><span style="color:#6ccf8a">■</span> added / changed <span style="color:#ef6b6b">■</span> removed</div>
+          <div id="diffStats" class="d muted"></div>
+          <h4>History</h4>
+          <div id="versList" class="muted">Loading…</div>
+        </div>
+        <!-- PARAMETERS -->
+        <div class="tab" id="tab-params">
+          <div id="paramHead" class="muted">Loading parameters…</div>
+          <div id="paramList"></div>
+          <div class="row">
+            <label><input type="checkbox" id="paramLive"> Live (after 0.8 s)</label>
+            <span class="grow"></span>
+            <button id="paramRevert" class="ghost">Revert</button>
+            <button id="paramApply" class="primary">Apply</button>
+          </div>
+          <div id="paramState" class="muted"></div>
+          <div id="paramLog" class="log" style="display:none"></div>
+        </div>
+        <!-- MOTION (shown for assemblies; joints come from <model>.motion.json) -->
+        <div class="tab" id="tab-motion">
+          <div id="motionEmpty">
+            <div class="d muted">No motion yet. Claude can find the joints (hinges, sliders, linkages) and write the animation.</div>
+            <div class="row"><button id="motionCreate" class="primary">Create motion</button></div>
+          </div>
+          <div id="motionBody">
+          <div id="motionWarn" class="d" style="color:var(--bad)"></div>
+          <h4>Animation</h4>
+          <div class="row"><select id="motionAnim" class="grow"></select><button id="motionPlay" class="primary">▶ Play</button></div>
+          <div class="row"><input type="range" id="motionT" min="0" max="1" step="0.001" value="0" class="grow"><span id="motionTV" class="mono">0 %</span></div>
+          <div class="row"><label>Speed <select id="motionSpeed"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option></select></label>
+            <label><input type="checkbox" id="motionLoop" checked> Loop</label><span class="grow"></span><button id="motionHome" class="ghost">Home</button></div>
+          <h4>Joints</h4>
+          <div id="jointList"></div>
+          <div class="row"><label><input type="checkbox" id="motionAxes"> Show joint axes</label></div>
+          <div class="d muted">Selecting, measuring and drawing return the model to the home pose first.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="status"><span id="hover"></span><span class="sp"></span><span id="units">mm</span><span id="src"></span><button id="bHelp" title="Keyboard shortcuts (?)">? Shortcuts</button></div>
+</div>
+
+<div id="modal">
+  <div class="card">
+    <h3>Note for Claude</h3>
+    <div class="inc" id="mInc"></div>
+    <img id="mShot" alt="Model screenshot">
+    <textarea id="mText" placeholder="What should change? E.g. “M5 through hole here”, “chamfer this edge 2 mm”, “this dimension should be 25 mm”…"></textarea>
+    <div class="muted" style="margin-top:4px">The note is appended to your chat draft. You send it yourself.</div>
+    <div class="foot"><button id="mCancel" class="ghost">Cancel</button><button id="mSend" class="primary">Add to message</button></div>
+  </div>
+</div>
+<div id="help">
+  <div class="card" style="width:min(440px,100%)">
+    <h3>Keyboard and mouse</h3>
+    <div class="keys">
+      <kbd>Mouse</kbd><span>Middle drag rotates (pivot under the cursor) · right drag or Ctrl + middle drag pans · wheel zooms</span>
+      <kbd>S</kbd><span>Select (Shift+click adds)</span>
+      <kbd>M</kbd><span>Measure</span>
+      <kbd>D</kbd><span>Draw over the view</span>
+      <kbd>K</kbd><span>Markers: click = point / line / area with a note · Delete = remove the selected one</span>
+      <kbd>Enter</kbd><span>Note for Claude</span>
+      <kbd>H</kbd><span>Hide the part under the cursor (or the selected parts)</span>
+      <kbd>Shift+H</kbd><span>Show all parts</span>
+      <kbd>T</kbd><span>Cycle transparency of the part under the cursor</span>
+      <kbd>I</kbd><span>Isolate the part under the cursor · again to go back</span>
+      <kbd>N</kbd><span>Look straight at the face under the cursor</span>
+      <kbd>F</kbd><span>Fit · double-click zooms to a point</span>
+      <kbd>1–4</kbd><span>Iso · front · top · right</span>
+      <kbd>P</kbd><span>Orthographic / perspective</span>
+      <kbd>X</kbd><span>Section on / off</span>
+      <kbd>[ ]</kbd><span>Previous / next design variant</span>
+      <kbd>Esc</kbd><span>Clear selection, close menus</span>
+      <span style="color:var(--text)">Right-click</span><span>Part menu: hide, isolate, transparency, look at face</span>
+    </div>
+    <div class="foot"><button id="helpClose" class="primary">Close</button></div>
+  </div>
+</div>
+<script type="module" src="/app.js"></script>
+<script src="/lib.js"></script>
+</body>
+</html>
