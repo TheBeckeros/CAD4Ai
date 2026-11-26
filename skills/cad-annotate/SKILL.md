@@ -57,7 +57,7 @@ them). The screenshot says **what** the user means and where it is on the part; 
    recommended option first and include the derived dimension.
 5. **Make the change in the parametric script** (following the cad-step-modeling skill if it
    is installed). Put new sizes into named parameters in the script header
-   (`NAME = value  # description [mm]`). The viewer then shows them in the Parameters tab and
+   (`NAME = value  # description [mm] min..max`, under a `# --- Group ---` line). The viewer then shows them in the Parameters tab and
    the user can tune them. Select edges and vertices by coordinates, not by index.
 6. **Export the STEP (no STL unless the task asks for it) and verify** (one solid per part, BRepCheck valid, volume against a hand
    calculation, face types). The viewer reloads by itself after the export and stores a new

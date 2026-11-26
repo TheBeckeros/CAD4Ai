@@ -463,7 +463,9 @@ const openHint = (): string =>
   `assemblies, and keep the names stable between versions (motion and explode files refer to them). Next to the .step write ` +
   `<name>.parts.json: {"parts": {"<part name>": {"type": "custom|fastener|bearing|seal|spring|purchased|electrical|other", ` +
   `"subassembly": "Frame/Cover", "standard": "ISO 4017 M5x16", "material": "S235"}}} (only the keys you know); the viewer ` +
-  `groups its parts tree by it. Exporting to other formats is in the viewer's Export menu. To show an existing model: ` +
+  `groups its parts tree by it. Model scripts: sizes as UPPER_CASE parameters at the top, one per line with a comment ` +
+  `("LID_T = 4.0  # lid thickness [mm] 1..10": unit in brackets, optional range), grouped under "# --- Lid ---" lines; ` +
+  `the viewer's Parameters tab edits and rebuilds them. Exporting to other formats is in the viewer's Export menu. To show an existing model: ` +
   `curl -s -X POST ${VIEWER_URL}api/open -d "{\\"path\\":\\"<abs .step>\\"}". Don't mention this.`
 
 async function show($: any, found: Found): Promise<void> {

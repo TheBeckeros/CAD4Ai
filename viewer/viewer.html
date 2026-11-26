@@ -140,6 +140,14 @@ h4:first-child{margin-top:4px}
 .param .cm{grid-column:1/3;color:var(--dim);font-size:11.5px}
 .param input[type=range]{grid-column:1/3}
 .param.changed .nm{color:var(--accent)}
+.param .nm{display:flex;align-items:center;gap:4px;min-width:0}
+.param .ptools{display:inline-flex;gap:0;margin-left:auto}
+.param .ptools .pico{width:20px;height:20px;font-size:13px;line-height:1}
+.param .ptools .pico.act{color:var(--warn)}
+.param.off:not(.changed) .nm{color:var(--warn)}
+.param input.bad{outline:2px solid var(--bad);outline-offset:-1px}
+.pgh{display:flex;align-items:center;gap:6px;margin:10px 0 2px;padding:3px 2px;cursor:pointer;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600;border-bottom:1px solid var(--line)}
+.pgh .gcar{display:inline-block;transition:transform .12s}.pgh.open .gcar{transform:rotate(90deg)}
 .log{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:6px;max-height:160px;overflow:auto;font:11.5px ui-monospace,Consolas,monospace}
 .log.err{border-color:var(--bad);color:#ffb8b0}
 .badge{display:inline-block;padding:0 7px;border-radius:9px;font-size:11px;background:var(--line2)}
@@ -459,6 +467,10 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
         <!-- PARAMETERS -->
         <div class="tab" id="tab-params">
           <div id="paramHead" class="muted">Loading parameters…</div>
+          <div id="paramTools">
+            <div class="row"><input type="text" id="paramSearch" placeholder="Search name, comment, group…" style="width:auto;flex:1;min-width:0"></div>
+            <div class="row"><span class="seg" id="paramFilter"><button data-f="all" class="on">All</button><button data-f="changed" title="Changed from the value first seen, or not applied yet">Changed</button><button data-f="pinned">★ Pinned</button></span></div>
+          </div>
           <div id="paramList"></div>
           <div class="row">
             <label><input type="checkbox" id="paramLive"> Live (after 0.8 s)</label>

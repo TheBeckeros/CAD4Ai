@@ -42,6 +42,7 @@ need the token in <data>/lan-token, GET /api/lan gives the full addresses for a 
 import argparse
 import ast
 import base64
+import contextlib
 import hashlib
 import io
 import json
@@ -274,6 +275,10 @@ def variants_of(path):
 # ---------------------------------------------------------------- params
 
 PARAM_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+# a comment line that starts a parameter group: "# --- Lid ---", "# === Lid ===", "## Lid"
+SECTION = re.compile(r"^#+\s*[-=*~]{3,}\s*(.+?)\s*[-=*~]*\s*$|^##+\s+(.+?)\s*$")
+# a range in the parameter comment: "[mm] 10..80" or "10…80"
+RANGE = re.compile(r"(-?\d+(?:\.\d+)?)\s*(?:\.\.|…)\s*(-?\d+(?:\.\d+)?)")
 
 
 def _literal(node):
@@ -290,11 +295,14 @@ def parse_params(script):
     with open(script, encoding="utf-8") as f:
         src = f.read()
     tree = ast.parse(src)
-    comments = {}
+    comments, sections = {}, []
     try:
         for tok in tokenize.generate_tokens(io.StringIO(src).readline):
             if tok.type == tokenize.COMMENT:
                 comments[tok.start[0]] = tok.string.lstrip("#").strip()
+                m = SECTION.match(tok.string.strip()) if tok.line.strip().startswith("#") else None
+                if m:
+                    sections.append((tok.start[0], (m.group(1) or m.group(2)).strip()))
     except tokenize.TokenError:
         pass
     out = []
@@ -316,10 +324,16 @@ def parse_params(script):
         if m:
             unit = m.group(1)
         kind = "bool" if isinstance(val, bool) else ("int" if isinstance(val, int) else "float")
-        out.append({
-            "name": t.id, "value": val, "type": kind, "comment": comment, "unit": unit,
+        group = next((name for line, name in reversed(sections) if line < node.lineno), "")
+        item = {
+            "name": t.id, "value": val, "type": kind, "comment": comment, "unit": unit, "group": group,
             "line": node.value.lineno, "col": node.value.col_offset, "endCol": node.value.end_col_offset,
-        })
+        }
+        r = RANGE.search(comment)
+        if r and kind != "bool":
+            lo, hi = sorted((float(r.group(1)), float(r.group(2))))
+            item["min"], item["max"] = lo, hi
+        out.append(item)
     return out
 
 
@@ -359,13 +373,92 @@ def write_params(script, values):
     return changes
 
 
-def run_script(script):
+def run_script_cold(script):
     t0 = time.time()
     r = subprocess.run([sys.executable, os.path.basename(script)], cwd=os.path.dirname(script),
                        capture_output=True, text=True, timeout=600,
                        creationflags=0x08000000 if os.name == "nt" else 0)
     return {"ok": r.returncode == 0, "code": r.returncode, "stdout": r.stdout[-4000:],
-            "stderr": r.stderr[-4000:], "ms": int((time.time() - t0) * 1000)}
+            "stderr": r.stderr[-4000:], "ms": int((time.time() - t0) * 1000), "warm": False}
+
+
+class Runner:
+    """One warm Python process (runner.py) with CadQuery imported, reused for every parameter rebuild.
+
+    It is restarted after a timeout, a crash, or every MAX_RUNS runs (memory); if it cannot start, scripts
+    run the old way in a fresh process."""
+    RESULT = "\x1eCAD4AI-RESULT "   # same marker as runner.py
+    MAX_RUNS = 40
+
+    def __init__(self):
+        self.proc, self.lines, self.runs, self.lock = None, None, 0, threading.Lock()
+
+    def _start(self):
+        import queue
+        self.proc = subprocess.Popen([sys.executable, "-u", os.path.join(HERE, "runner.py")], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+                                     errors="replace", creationflags=0x08000000 if os.name == "nt" else 0)
+        self.lines, self.runs = queue.Queue(), 0
+        proc, q = self.proc, self.lines
+
+        def pump():
+            for line in proc.stdout:
+                if line.startswith(self.RESULT):
+                    q.put(line[len(self.RESULT):])
+            q.put(None)
+        threading.Thread(target=pump, daemon=True).start()
+
+    def _read(self, timeout):
+        import queue
+        try:
+            line = self.lines.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        return None if line is None else json.loads(line)
+
+    def stop(self):
+        if self.proc:
+            with contextlib.suppress(Exception):
+                self.proc.kill()
+        self.proc = None
+
+    def warm(self):
+        """Start the runner in the background so the first rebuild is already fast."""
+        def go():
+            with self.lock:
+                if not self.proc or self.proc.poll() is not None:
+                    try:
+                        self._start()
+                        self._read(120)  # the ready line, after the CadQuery import
+                    except Exception:  # noqa: BLE001
+                        self.stop()
+        threading.Thread(target=go, daemon=True).start()
+
+    def run(self, script, timeout=600):
+        with self.lock:
+            try:
+                if not self.proc or self.proc.poll() is not None or self.runs >= self.MAX_RUNS:
+                    self.stop()
+                    self._start()
+                    if not (self._read(120) or {}).get("ready"):
+                        raise RuntimeError("runner did not start")
+                self.proc.stdin.write(json.dumps({"script": script}) + "\n")
+                self.proc.stdin.flush()
+                res = self._read(timeout)
+                if res is None:
+                    raise RuntimeError("runner timed out or crashed")
+                self.runs += 1
+                return res
+            except Exception:  # noqa: BLE001 - fall back to a fresh process
+                self.stop()
+        return run_script_cold(script)
+
+
+RUNNER = Runner()
+
+
+def run_script(script):
+    return RUNNER.run(script)
 
 
 # ---------------------------------------------------------------- notes
@@ -816,6 +909,7 @@ class Handler(BaseHTTPRequestHandler):
                 cur = current()
                 if not cur.get("script"):
                     return self._send(200, {"script": None, "params": []})
+                RUNNER.warm()  # the Parameters tab is open: get CadQuery imported before the first change
                 try:
                     return self._send(200, {"script": cur["script"], "params": parse_params(cur["script"])})
                 except SyntaxError as exc:

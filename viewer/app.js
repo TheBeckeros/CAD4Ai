@@ -330,10 +330,19 @@ async function loadModel(info, keepCamera) {
   renderParts(); renderSelection(); loadParams(); loadVersions(); loadNotes(true); loadMotion(); loadVariants(); loadExplode(); loadMarkers(); loadPartsMeta();
   if (ghost.id) loadGhost(ghost.id);
   renderSavedViews(); restoreMeas();
+  if (paramT) {
+    const tot = (performance.now() - paramT.t0 + paramT.script) / 1000;
+    renderParamsState(`Done in ${tot.toFixed(1)} s (script ${(paramT.script / 1000).toFixed(2)} s${paramT.warm === false ? ', cold start' : ''}, model reload ${((performance.now() - paramT.t0) / 1000).toFixed(1)} s): ${paramT.changes.join(', ')}`);
+    paramT = null;
+  }
   if (anaState.kind === 'collide') runCollisions(); else if (anaState.kind) runAnalysis();
 }
 
-async function poll() {
+let checking = null;
+/** Look for a new model or changed side files now (also called right after a parameter rebuild). */
+function checkLatest() { return checking ??= checkLatestOnce().finally(() => { checking = null; }); }
+async function poll() { await checkLatest(); setTimeout(poll, 1200); }
+async function checkLatestOnce() {
   try {
     const info = await api('/api/latest');
     const cur = model.info;
@@ -353,7 +362,6 @@ async function poll() {
       model.info = info; if (m) loadMotion(); if (x) loadExplode(); if (pm) loadPartsMeta();
     }
   } catch (e) { /* server is restarting */ }
-  setTimeout(poll, 1200);
 }
 
 // ========================================================== camera, views
@@ -2021,14 +2029,27 @@ function drawMarkers() {
 }
 
 // ============================================================= parameters
-let params = [], paramEdits = {}, paramBusy = false, liveT = null;
+let params = [], paramEdits = {}, paramBusy = false, liveT = null, paramScript = '', paramT = null;
+let paramFilter = 'all';
+const paramGrpClosed = new Set();
+// per script, in this browser: the values first seen (to reset to) and the pinned parameters
+const pKey = k => `cadp.param${k}:${paramScript}`;
+const pLoad = (k, d) => { try { return JSON.parse(localStorage.getItem(pKey(k)) || 'null') ?? d; } catch { return d; } };
+const pSave = (k, v) => { try { localStorage.setItem(pKey(k), JSON.stringify(v)); } catch { /* per-viewer convenience */ } };
+let paramOrig = {}, paramPins = new Set();
 async function loadParams() {
   let res;
   try { res = await api('/api/params'); } catch { res = { params: [] }; }
   params = res.params || []; paramEdits = {};
+  paramScript = res.script || '';
+  paramOrig = pLoad('Orig', {}); paramPins = new Set(pLoad('Pins', []));
+  let added = false;
+  for (const p of params) if (!(p.name in paramOrig)) { paramOrig[p.name] = p.value; added = true; }
+  if (added) pSave('Orig', paramOrig);
   $('paramHead').innerHTML = res.script
-    ? `Script: <span class="mono">${esc(res.script.split(/[\\/]/).pop())}</span>${res.error ? `<div style="color:var(--bad)">${esc(res.error)}</div>` : ''}`
+    ? `Script: <span class="mono">${esc(res.script.split(/[\\/]/).pop())}</span> · ${params.length} parameter${params.length === 1 ? '' : 's'}${res.error ? `<div style="color:var(--bad)">${esc(res.error)}</div>` : ''}`
     : 'No parametric script found for this model (a .py file in the same folder that mentions the model file name).';
+  $('paramTools').style.display = params.length > 3 ? '' : 'none';
   renderParams();
 }
 function paramStep(p) {
@@ -2036,20 +2057,52 @@ function paramStep(p) {
   const v = Math.abs(p.value);
   return v >= 100 ? 1 : v >= 10 ? 0.1 : v >= 1 ? 0.05 : 0.01;
 }
-function renderParams() {
-  const el = $('paramList');
-  el.innerHTML = params.map(p => {
-    const v = p.name in paramEdits ? paramEdits[p.name] : p.value;
-    const changed = p.name in paramEdits && paramEdits[p.name] !== p.value;
-    if (p.type === 'bool') return `<div class="param ${changed ? 'changed' : ''}"><span class="nm">${esc(p.name)}</span><input type="checkbox" data-n="${p.name}" ${v ? 'checked' : ''}><span class="cm">${esc(p.comment)}</span></div>`;
-    const step = paramStep(p);
+const paramCur = p => (p.name in paramEdits ? paramEdits[p.name] : p.value);
+const paramChanged = p => paramCur(p) !== (paramOrig[p.name] ?? p.value) || (p.name in paramEdits && paramEdits[p.name] !== p.value);
+function paramHtml(p) {
+  const v = paramCur(p), pending = p.name in paramEdits && paramEdits[p.name] !== p.value;
+  const orig = paramOrig[p.name], off = orig !== undefined && v !== orig;
+  const tools = `<span class="ptools"><button class="pico ${paramPins.has(p.name) ? 'act' : ''}" data-pin="${p.name}" title="${paramPins.has(p.name) ? 'Unpin' : 'Pin to the top'}">${paramPins.has(p.name) ? '★' : '☆'}</button>${off ? `<button class="pico" data-reset="${p.name}" title="Back to the original value ${esc(String(orig))}">↺</button>` : ''}</span>`;
+  const cls = `param ${pending ? 'changed' : ''} ${off ? 'off' : ''}`;
+  if (p.type === 'bool') return `<div class="${cls}" data-p="${p.name}"><span class="nm">${esc(p.name)}${tools}</span><input type="checkbox" data-n="${p.name}" ${v ? 'checked' : ''}><span class="cm">${esc(p.comment)}</span></div>`;
+  const step = paramStep(p);
+  let min, max;
+  if (p.min !== undefined) { min = p.min; max = p.max; }
+  else {
     const span = Math.max(Math.abs(p.value) * 2, step * 20);
-    const min = p.value >= 0 ? 0 : p.value - span / 2, max = p.value >= 0 ? Math.max(span, p.value * 2) : p.value + span / 2;
-    return `<div class="param ${changed ? 'changed' : ''}"><span class="nm">${esc(p.name)}</span>
-      <span><input type="number" data-n="${p.name}" value="${v}" step="${step}"> <span class="muted">${esc(p.unit)}</span></span>
+    min = p.value >= 0 ? 0 : p.value - span / 2; max = p.value >= 0 ? Math.max(span, p.value * 2) : p.value + span / 2;
+  }
+  const out = p.min !== undefined && (v < p.min || v > p.max);
+  return `<div class="${cls}" data-p="${p.name}"><span class="nm">${esc(p.name)}${tools}</span>
+      <span><input type="number" data-n="${p.name}" value="${v}" step="${step}" ${p.min !== undefined ? `min="${p.min}" max="${p.max}"` : ''} ${out ? 'class="bad"' : ''}> <span class="muted">${esc(p.unit)}</span></span>
       <input type="range" data-r="${p.name}" min="${min}" max="${max}" step="${step}" value="${v}">
       <span class="cm">${esc(p.comment)}</span></div>`;
-  }).join('');
+}
+function renderParams() {
+  const el = $('paramList');
+  const q = $('paramSearch').value.trim().toLowerCase();
+  document.querySelectorAll('#paramFilter button').forEach(b => b.classList.toggle('on', b.dataset.f === paramFilter));
+  const shown = params.filter(p => (!q || [p.name, p.comment, p.group, p.unit].some(x => x && x.toLowerCase().includes(q)))
+    && (paramFilter === 'all' || (paramFilter === 'changed' ? paramChanged(p) : paramPins.has(p.name))));
+  // pinned first, then the groups in script order (from "# --- Name ---" comment lines)
+  const groups = new Map();
+  const pinned = paramFilter !== 'pinned' ? shown.filter(p => paramPins.has(p.name)) : [];
+  if (pinned.length) groups.set('★ Pinned', pinned);
+  for (const p of shown) { if (pinned.includes(p)) continue; const g = p.group || ''; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); }
+  const many = groups.size > 1 || [...groups.keys()].some(Boolean);
+  el.innerHTML = [...groups].map(([g, ps]) => {
+    const open = q || !paramGrpClosed.has(g);
+    const head = many ? `<div class="pgh ${open ? 'open' : ''}" data-g="${esc(g)}"><span class="gcar">▸</span> ${esc(g || 'Other')} <span class="muted">${ps.length}</span></div>` : '';
+    return head + (open || !many ? ps.map(paramHtml).join('') : '');
+  }).join('') || `<div class="muted" style="padding:8px 0">${params.length ? 'No parameter matches.' : ''}</div>`;
+  el.querySelectorAll('.pgh').forEach(h => h.onclick = () => { const g = h.dataset.g; if (paramGrpClosed.has(g)) paramGrpClosed.delete(g); else paramGrpClosed.add(g); renderParams(); });
+  el.querySelectorAll('[data-pin]').forEach(b => b.onclick = () => { const n = b.dataset.pin; if (paramPins.has(n)) paramPins.delete(n); else paramPins.add(n); pSave('Pins', [...paramPins]); renderParams(); });
+  el.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => {
+    const p = params.find(x => x.name === b.dataset.reset), v = paramOrig[p.name];
+    if (v === p.value) delete paramEdits[p.name]; else paramEdits[p.name] = v;
+    renderParams(); updateParamButtons();
+    if ($('paramLive').checked) { clearTimeout(liveT); liveT = setTimeout(applyParams, 800); }
+  });
   el.querySelectorAll('input[data-n]').forEach(inp => {
     const name = inp.dataset.n, p = params.find(x => x.name === name);
     inp.onchange = inp.oninput = () => {
@@ -2062,6 +2115,9 @@ function renderParams() {
     const p = params.find(x => x.name === r.dataset.r);
     r.oninput = () => { const val = p.type === 'int' ? Math.round(+r.value) : +r.value; const num = el.querySelector(`input[data-n="${p.name}"]`); num.value = val; setEdit(p, val, r); };
   });
+  updateParamButtons();
+}
+function updateParamButtons() {
   const dirty = Object.keys(paramEdits).some(k => paramEdits[k] !== params.find(p => p.name === k)?.value);
   $('paramApply').disabled = !dirty || paramBusy;
   $('paramRevert').disabled = !dirty || paramBusy;
@@ -2069,9 +2125,9 @@ function renderParams() {
 function setEdit(p, val, srcEl) {
   paramEdits[p.name] = val;
   srcEl.closest('.param').classList.toggle('changed', val !== p.value);
-  const dirty = Object.keys(paramEdits).some(k => paramEdits[k] !== params.find(q => q.name === k)?.value);
-  $('paramApply').disabled = !dirty || paramBusy;
-  $('paramRevert').disabled = !dirty || paramBusy;
+  const num = srcEl.closest('.param').querySelector('input[type=number]');
+  if (num && p.min !== undefined) num.classList.toggle('bad', val < p.min || val > p.max);
+  updateParamButtons();
   if ($('paramLive').checked) { clearTimeout(liveT); liveT = setTimeout(applyParams, 800); }
 }
 async function applyParams() {
@@ -2087,7 +2143,8 @@ async function applyParams() {
     log.style.display = (r.stderr || !r.ok) ? 'block' : 'none';
     log.classList.toggle('err', !r.ok);
     log.textContent = (r.stdout || '') + (r.stderr ? '\n' + r.stderr : '');
-    renderParamsState(r.ok ? `Done in ${(r.ms / 1000).toFixed(1)} s: ${r.changes.join(', ')}` : `The script failed (exit code ${r.code}). The new values stay in the file; use Restore in the Versions tab to undo them.`, !r.ok);
+    if (r.ok && r.changes?.length) { paramT = { t0: performance.now(), script: r.ms, warm: r.warm, changes: r.changes }; checkLatest(); }
+    renderParamsState(r.ok ? `Script ${(r.ms / 1000).toFixed(2)} s${r.warm === false ? ' (cold start)' : ''}, loading the model…: ${r.changes.join(', ')}` : `The script failed (exit code ${r.code}). The new values stay in the file; use Restore in the Versions tab to undo them.`, !r.ok);
   } catch (e) {
     renderParamsState('Error: ' + e.message, true);
   } finally {
@@ -2616,6 +2673,8 @@ document.querySelectorAll('#noteFilter button').forEach(b => b.onclick = () => {
 $('pinsOn').onchange = renderPins;
 
 // --- parameters
+$('paramSearch').oninput = () => renderParams();
+document.querySelectorAll('#paramFilter button').forEach(b => b.onclick = () => { paramFilter = b.dataset.f; renderParams(); });
 $('paramApply').onclick = applyParams;
 $('paramRevert').onclick = () => { paramEdits = {}; renderParams(); };
 
