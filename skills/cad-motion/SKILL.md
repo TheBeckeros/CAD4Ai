@@ -5,8 +5,9 @@ description: Use only when the user asks for motion, animation, kinematics, rang
 
 # Motion and kinematics for the CAD4Ai viewer
 
-Only on request: never write a motion file unasked. If an assembly you just built clearly has
-moving parts, you may offer it in one line. `<model>.motion.json` next to `<model>.step` gives
+Only on request: never write a motion file unasked, and do not start it while the design is still
+being worked out. Mention it at most once, in one line, and only after the user has confirmed the
+design; it costs a lot of tokens, so wait for a clear yes. `<model>.motion.json` next to `<model>.step` gives
 the viewer's **Motion** tab joint sliders, Play / Pause, scrubbing and the joint axes.
 
 Start with the geometry dump instead of writing your own inspection code:

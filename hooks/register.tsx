@@ -465,7 +465,10 @@ const openHint = (): string =>
   `"subassembly": "Frame/Cover", "standard": "ISO 4017 M5x16", "material": "S235"}}} (only the keys you know); the viewer ` +
   `groups its parts tree by it. Model scripts: sizes as UPPER_CASE parameters at the top, one per line with a comment ` +
   `("LID_T = 4.0  # lid thickness [mm] 1..10": unit in brackets, optional range), grouped under "# --- Lid ---" lines; ` +
-  `the viewer's Parameters tab edits and rebuilds them. Exporting to other formats is in the viewer's Export menu. To show an existing model: ` +
+  `the viewer's Parameters tab edits and rebuilds them. Exporting to other formats is in the viewer's Export menu. ` +
+  `Build only the model and its cheap files (.step, .parts.json); never create motion, exploded view / disassembly, drawings or ` +
+  `other extras by default, not even after the design is done: only when the user asks for them (or after they confirm the design and say yes to one). ` +
+  `To show an existing model: ` +
   `curl -s -X POST ${VIEWER_URL}api/open -d "{\\"path\\":\\"<abs .step>\\"}". Don't mention this.`
 
 async function show($: any, found: Found): Promise<void> {

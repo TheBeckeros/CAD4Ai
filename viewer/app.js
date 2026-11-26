@@ -164,7 +164,17 @@ function occt() {
 }
 
 async function readStep(path) {
-  return parseStep(await (await fetch('/api/file?path=' + encodeURIComponent(path), { cache: 'no-store' })).arrayBuffer());
+  const colP = fetch('/api/stepcolors?path=' + encodeURIComponent(path)).then(r => r.ok ? r.json() : {}).catch(() => ({}));
+  const parts = await parseStep(await (await fetch('/api/file?path=' + encodeURIComponent(path), { cache: 'no-store' })).arrayBuffer());
+  // occt-import-js drops colours set on instances or on the solids of a multi-solid part: fill them in from the server's XCAF read
+  if (parts.some(p => !p.color && !p.faceRanges?.some(f => f.color))) {
+    const cols = (await colP).colors || {};
+    for (const p of parts) {
+      const c = cols[p.name] ?? cols[p.path?.[p.path.length - 1]];
+      if (!p.color && c && !p.faceRanges?.some(f => f.color)) p.color = stepColor(c);
+    }
+  }
+  return parts;
 }
 // occt-import-js hands colours over already linear (OCCT converts the STEP sRGB values), which is three's working space
 const stepColor = c => new THREE.Color(c[0], c[1], c[2]);
@@ -789,7 +799,7 @@ function entGeom(pk) {
     const f = p.an.faces[pk.id];
     e.face = f;
     if (f.type === 'plane') { e.kind = 'plane'; e.n = f.normal; e.c = f.centroid; }
-    else if (f.type === 'cylinder') { e.kind = 'cyl'; e.axis = f.axis; e.center = f.center; e.r = f.radius; }
+    else if (f.type === 'cylinder') { e.kind = 'cyl'; e.axis = f.axis; e.center = f.center; e.r = f.radius; e.len = f.length; }
     else e.kind = 'point';
   } else if (pk.type === 'edge') {
     const ed = p.an.edges[pk.id];
@@ -848,6 +858,8 @@ function angleGeom(A, B) {
 function computeMeasure(mode, A, B) {
   const refs = B ? [describeEnt(A), describeEnt(B)] : [describeEnt(A)];
   const isRound = e => e.kind === 'cyl' || e.kind === 'circle';
+  // centre line drawn with axis dimensions: through the feature, a bit longer than it
+  const axisOf = e => ({ part: e.part, c: e.center, d: v3.norm(e.axis), half: Math.max(e.len ?? 0, 2 * e.r) / 2 + e.r * 0.6 });
   if (!B) {
     if (isRound(A)) return { kind: 'dia', value: 2 * A.r, text: `Ø ${fmtn(2 * A.r)} mm (R ${fmtn(A.r)})`, a: { part: A.part, p: A.center }, b: { part: A.part, p: A.point }, round: { axis: A.axis, center: A.center, point: A.point, r: A.r }, refs };
     return null;
@@ -870,9 +882,10 @@ function computeMeasure(mode, A, B) {
   // auto
   if (isRound(A) && isRound(B)) {
     if (ang(A.axis, B.axis) < 0.05) {
-      const [q1, q2] = lineLineClosest(A.center, A.axis, B.center, B.axis);
+      // pitch of two parallel axes: closest points on the axes near the clicked spots, with ΔX ΔY ΔZ
+      const [q1, q2] = lineLineClosest(A.point, A.axis, B.center, B.axis);
       const d = v3.dist(q1, q2);
-      return { kind: 'dist', value: d, text: `axes ${fmtn(d)} mm`, a: { part: A.part, p: q1 }, b: { part: B.part, p: q2 }, refs };
+      return { kind: 'dist', value: d, text: `axes ${fmtn(d)} mm`, comp: v3.sub(q2, q1), a: { part: A.part, p: q1 }, b: { part: B.part, p: q2 }, refs, axes: [axisOf(A), axisOf(B)] };
     }
     const d = v3.dist(A.center, B.center);
     return { kind: 'dist', value: d, text: `centers ${fmtn(d)} mm`, a: { part: A.part, p: A.center }, b: { part: B.part, p: B.center }, refs };
@@ -885,6 +898,15 @@ function computeMeasure(mode, A, B) {
     }
     const deg = ang(A.n, B.n);
     return { kind: 'angle', value: deg, text: `${fmtn(deg, 2)}° mezi plochami`, a: { part: A.part, p: P1 }, b: { part: B.part, p: P2 }, refs, ...angleGeom(A, B) };
+  }
+  // a point or a straight edge against the axis of a hole / pin
+  const round = isRound(A) ? A : isRound(B) ? B : null, rest = round === A ? B : A;
+  if (round && (rest.kind === 'point' || (rest.kind === 'line' && ang(rest.dir, round.axis) < 0.05))) {
+    const ax = v3.norm(round.axis), from = rest.point;
+    const q = v3.add(round.center, v3.mul(ax, v3.dot(v3.sub(from, round.center), ax)));
+    const d = v3.dist(from, q);
+    const what = rest.kind === 'line' ? 'edge ∥ axis' : 'point ↔ axis';
+    return { kind: 'dist', value: d, text: `${what} ${fmtn(d)} mm`, comp: v3.sub(from, q), a: { part: round.part, p: q }, b: { part: rest.part, p: from }, refs, axes: [axisOf(round)] };
   }
   const plane = A.kind === 'plane' ? A : B.kind === 'plane' ? B : null;
   const other = plane === A ? B : A;
@@ -1084,6 +1106,11 @@ function drawMeasurement(m) {
         const l = measLabel(`${'XYZ'[i]} ${fmtn(Math.abs(m.comp[i]))}`, p.clone().lerp(q, 0.5), 'comp'); l.element.style.borderColor = '#' + AXIS_COL[i].toString(16).padStart(6, '0');
         m.objs.push(l); p = q;
       });
+    }
+    // centre lines of the measured axes (dash-dot style of a drawing)
+    for (const x of m.axes || []) {
+      const o = partOffset(x.part), c = new THREE.Vector3(...x.c).add(o), d = new THREE.Vector3(...x.d);
+      m.objs.push(measLine([c.clone().addScaledVector(d, -x.half), c.clone().addScaledVector(d, x.half)], { linewidth: 1, ...measDash(c) }));
     }
   } else if (m.kind === 'info') {
     // one feature: dot and a label on a short leader up-right on screen

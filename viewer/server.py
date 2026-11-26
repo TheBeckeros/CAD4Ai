@@ -377,6 +377,22 @@ def write_params(script, values):
     return changes
 
 
+COLOR_CACHE = {}
+
+
+def step_colors(path):
+    """Part colours read with OCCT XCAF (instance and per-solid colours the browser loader misses)."""
+    key = (os.path.abspath(path), os.path.getmtime(path))
+    if key not in COLOR_CACHE:
+        try:
+            r = subprocess.run([sys.executable, os.path.join(HERE, "stepcolors.py"), path],
+                               capture_output=True, text=True, timeout=300, encoding="utf-8")
+            COLOR_CACHE[key] = json.loads(r.stdout or "{}")
+        except (subprocess.SubprocessError, ValueError) as e:
+            return {"colors": {}, "error": str(e)}
+    return COLOR_CACHE[key]
+
+
 def run_script_cold(script):
     t0 = time.time()
     r = subprocess.run([sys.executable, os.path.basename(script)], cwd=os.path.dirname(script),
@@ -909,6 +925,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not path.lower().endswith(MODEL_EXT) or not os.path.isfile(path):
                     return self._send(404, {"error": "not found"})
                 return self._file(path)
+            if url.path == "/api/stepcolors":
+                path = (q.get("path") or [""])[0]
+                if not path.lower().endswith((".step", ".stp")) or not os.path.isfile(path):
+                    return self._send(404, {"error": "not found"})
+                return self._send(200, step_colors(path))
             if url.path in ("/api/motion", "/api/explode", "/api/parts"):
                 key = url.path.rsplit("/", 1)[1]
                 cur = current()

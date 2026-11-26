@@ -5,7 +5,8 @@ description: Use only when the user asks for an exploded view, disassembly / ass
 
 # Exploded view and disassembly for the CAD4Ai viewer
 
-Only on request: never write an explode file unasked. `<model>.explode.json` next to
+Only on request: never write an explode file unasked, and never as part of building or changing a model
+(it costs a lot of tokens; at most offer it in one line once the user has confirmed the design). `<model>.explode.json` next to
 `<model>.step` gives the viewer's **Parts → Exploded view → Disassembly** a step list, Play,
 a step slider and trail lines. The point is **disassembly**: an order in which real parts can
 actually come out, and a clear verdict on what cannot.

@@ -14,6 +14,7 @@ import sys
 # format -> (extension, description, needs CadQuery)
 FORMATS = {
     "step": (".step", "AP214 · exact B-rep, keeps names and colours", False),
+    "step-merged": (".step", "AP214 · cylinders and planes merged into whole faces (no split half-faces)", True),
     "iges": (".igs", "exact B-rep, older CAD systems", True),
     "brep": (".brep", "OpenCascade native, exact", True),
     "stl": (".stl", "mesh · 3D printing", True),
@@ -62,6 +63,64 @@ def write_obj(shape, path, tol, ang):
         f.write("\n".join(lines) + "\n")
 
 
+def write_step_merged(src, out):
+    """STEP with split faces merged (ShapeUpgrade_UnifySameDomain) while keeping names, colours and the assembly.
+
+    CadQuery and many kernels build a full cylinder from two half-faces; merging leaves one face per
+    cylinder (a closed periodic face still has its seam edge, which every B-rep needs)."""
+    from OCP.STEPCAFControl import STEPCAFControl_Reader, STEPCAFControl_Writer
+    from OCP.TDocStd import TDocStd_Document
+    from OCP.TCollection import TCollection_ExtendedString
+    from OCP.XCAFDoc import XCAFDoc_DocumentTool
+    from OCP.TDF import TDF_LabelSequence
+    from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.STEPControl import STEPControl_AsIs
+
+    doc = TDocStd_Document(TCollection_ExtendedString("XmlOcaf"))
+    rd = STEPCAFControl_Reader()
+    rd.SetColorMode(True)
+    rd.SetNameMode(True)
+    rd.SetLayerMode(True)
+    if rd.ReadFile(src) != IFSelect_RetDone or not rd.Transfer(doc):
+        raise RuntimeError("cannot read the STEP file")
+    st = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    labels = TDF_LabelSequence()
+    st.GetShapes(labels)
+    for i in range(1, labels.Length() + 1):
+        lab = labels.Value(i)
+        if st.IsAssembly_s(lab) or st.IsReference_s(lab):
+            continue
+        shp = st.GetShape_s(lab)
+        if shp.IsNull():
+            continue
+        usd = ShapeUpgrade_UnifySameDomain(shp, True, True, True)
+        usd.Build()
+        new = usd.Shape()
+        if new.IsNull():
+            continue
+        hist = usd.History()
+        # sub-shape labels (coloured solids or faces) follow their merged shape
+        subs = TDF_LabelSequence()
+        st.GetSubShapes_s(lab, subs)
+        for k in range(1, subs.Length() + 1):
+            sl = subs.Value(k)
+            old = st.GetShape_s(sl)
+            if hist.IsRemoved(old):
+                continue
+            mod = hist.Modified(old)
+            if mod.Size() == 1:
+                st.SetShape(sl, mod.First())
+        st.SetShape(lab, new)
+    st.UpdateAssemblies()
+    w = STEPCAFControl_Writer()
+    w.SetColorMode(True)
+    w.SetNameMode(True)
+    w.SetLayerMode(True)
+    if not w.Transfer(doc, STEPControl_AsIs) or w.Write(out) != IFSelect_RetDone:
+        raise RuntimeError("STEP writer failed")
+
+
 def export(src, fmt, out, quality="normal"):
     is_step = src.lower().endswith((".step", ".stp"))
     if (fmt == "step" and is_step) or (fmt == "stl" and not is_step):
@@ -69,6 +128,11 @@ def export(src, fmt, out, quality="normal"):
         return
     if not is_step:
         raise ValueError("an STL model can only be saved as STL")
+    if fmt == "step-merged":
+        write_step_merged(src, out)
+        if not os.path.isfile(out) or os.path.getsize(out) == 0:
+            raise RuntimeError("the exporter wrote nothing")
+        return
     import cadquery as cq
     tol, ang = QUALITY[quality]
     vals = cq.importers.importStep(src).vals()
