@@ -123,7 +123,7 @@ const strokes = [];         // {color, screen:[[x,y]] css px, hits:[{part, local
 const measurements = [];    // see addMeasurement
 let measPicks = [];
 const section = { on: false, mode: 'z', flip: false, t: 0.5, d: 0, n: new THREE.Vector3(0, 0, 1), plane: new THREE.Plane(), az: 0, el: 90, extra: [], box: new THREE.Box3() };
-const display = { edges: true, wire: false, grid: true, axes: false, look: 'shaded', shadow: false, ao: false, cube: true, alpha: 0.4 }; // alpha: opacity of parts marked transparent
+const display = { edges: true, wire: false, grid: false, axes: false, look: 'shaded', shadow: false, ao: false, cube: true, triad: true, alpha: 0.4 }; // alpha: opacity of parts marked transparent
 let explode = 0;
 const xplan = { def: null, error: '', mode: 'radial', s: 0, playing: false, last: 0, modelPath: '', trails: new THREE.Group() };
 scene.add(xplan.trails);
@@ -163,6 +163,8 @@ function occt() {
 async function readStep(path) {
   return parseStep(await (await fetch('/api/file?path=' + encodeURIComponent(path), { cache: 'no-store' })).arrayBuffer());
 }
+// occt-import-js hands colours over already linear (OCCT converts the STEP sRGB values), which is three's working space
+const stepColor = c => new THREE.Color(c[0], c[1], c[2]);
 async function parseStep(arrayBuf) {
   const buf = new Uint8Array(arrayBuf);
   const o = await occt();
@@ -179,8 +181,9 @@ async function parseStep(arrayBuf) {
     positions: Float32Array.from(m.attributes.position.array),
     normals: m.attributes.normal ? Float32Array.from(m.attributes.normal.array) : null,
     index: Uint32Array.from(m.index.array),
-    faceRanges: m.brep_faces.map(f => ({ first: f.first, last: f.last })),
-    color: m.color ? new THREE.Color(m.color[0], m.color[1], m.color[2]) : null,
+    // per-face STEP colours (SolidWorks and others often colour faces, not bodies)
+    faceRanges: m.brep_faces.map(f => ({ first: f.first, last: f.last, color: f.color ? stepColor(f.color) : null })),
+    color: m.color ? stepColor(m.color) : null,
   }));
 }
 
@@ -206,7 +209,18 @@ function buildPart(src, i, count) {
   const bvhGeo = geo.clone();
   geo.boundsTree = new MeshBVH(geo);
 
-  const color = src.color ?? new THREE.Color(count > 1 ? PALETTE[i % PALETTE.length] : BASE_COLOR);
+  // faces with their own STEP colour: the vertex colours carry them and the material goes white (see applyPartLook)
+  const faceCols = src.faceRanges?.some(f => f.color) ? src.faceRanges.map(f => f.color) : null;
+  const color = src.color ?? (faceCols ? faceCols.find(Boolean).clone() : new THREE.Color(count > 1 ? PALETTE[i % PALETTE.length] : BASE_COLOR));
+  let baseCol = null;
+  if (faceCols) {
+    baseCol = new Float32Array(nV * 3);
+    for (let t = 0; t < an.nTri; t++) {
+      const c = faceCols[an.triFace[t]] ?? color;
+      for (let k = 0; k < 3; k++) { const v = an.index[t * 3 + k]; baseCol[v * 3] = c.r; baseCol[v * 3 + 1] = c.g; baseCol[v * 3 + 2] = c.b; }
+    }
+    geo.attributes.color.array.set(baseCol);
+  }
   const po = { polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 };
   const mats = {
     shaded: clipMat(new THREE.MeshStandardMaterial({ color, metalness: 0.15, roughness: 0.62, vertexColors: true, ...po })),
@@ -233,7 +247,7 @@ function buildPart(src, i, count) {
   pose.add(group);
   const bb = geo.boundingBox;
   return {
-    index: i, name: src.name, an, geo, bvhGeo, mesh, cap, edgesObj, group, pose, mat, mats, alert: false,
+    index: i, name: src.name, an, geo, bvhGeo, mesh, cap, edgesObj, group, pose, mat, mats, alert: false, baseCol, faceTint: !!baseCol,
     // per-part display: '' follows the Display menu; a mesh without B-rep faces (STL, scan) with
     // thousands of estimated edges would be a black tangle, so it starts shaded without edges
     mode: !src.faceRanges && an.edges.length > 1500 ? 'shaded' : '',
@@ -393,6 +407,7 @@ let needOutline = false;
   if (needOutline) { needOutline = false; buildOutline(); }
   renderMain();
   renderCube();
+  renderTriad();
   labelRenderer.render(scene, camera);
 })();
 function renderMain() {
@@ -461,6 +476,42 @@ function renderCube() {
   renderer.setScissorTest(true);
   renderer.setScissor(r.x, h - r.y - r.s, r.s, r.s); renderer.setViewport(r.x, h - r.y - r.s, r.s, r.s);
   renderer.render(cubeScene, cubeCam);
+  renderer.setScissorTest(false); renderer.setViewport(0, 0, view.clientWidth, h);
+  renderer.autoClear = true;
+}
+// ========================================================= axis triad
+// X/Y/Z arrows in the bottom-left corner, turning with the model (same camera direction as the view cube)
+const TRIAD = { size: 84, margin: 6 };
+const triadScene = new THREE.Scene();
+const triadCam = new THREE.OrthographicCamera(-1.25, 1.25, 1.25, -1.25, 0.1, 10);
+(() => {
+  const label = (txt, col) => {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d');
+    g.fillStyle = col; g.font = '700 44px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(txt, 32, 34);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false })); s.scale.setScalar(0.42); s.renderOrder = 2;
+    return s;
+  };
+  for (const [txt, col, dir] of [['X', '#e5655a', [1, 0, 0]], ['Y', '#7cbf8a', [0, 1, 0]], ['Z', '#7fa7d6', [0, 0, 1]]]) {
+    const d = new THREE.Vector3(...dir);
+    const arrow = new THREE.ArrowHelper(d, new THREE.Vector3(), 0.82, col, 0.22, 0.12);
+    arrow.line.material.linewidth = 2;
+    triadScene.add(arrow);
+    const l = label(txt, col); l.position.copy(d).multiplyScalar(1.02); triadScene.add(l);
+  }
+  triadScene.add(new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 8), new THREE.MeshBasicMaterial({ color: 0xc2c0b6 })));
+})();
+function renderTriad() {
+  if (!display.triad || !model.parts.length) return;
+  const h = view.clientHeight, s = TRIAD.size, x = TRIAD.margin, y = TRIAD.margin + 22;  // above the hint line
+  triadCam.position.copy(camera.position).sub(controls.target).normalize().multiplyScalar(4);
+  triadCam.up.copy(camera.up); triadCam.lookAt(0, 0, 0);
+  renderer.autoClear = false; renderer.clearDepth();
+  renderer.setScissorTest(true);
+  renderer.setScissor(x, y, s, s); renderer.setViewport(x, y, s, s);
+  renderer.render(triadScene, triadCam);
   renderer.setScissorTest(false); renderer.setViewport(0, 0, view.clientWidth, h);
   renderer.autoClear = true;
 }
@@ -1170,10 +1221,19 @@ function buildOutline() {
 function setSectionOn(on) { section.on = on; $('secOn').checked = on; updateSection(); }
 
 // ===================================================== parts, exploded view
+/** Vertex colours back to the part's own look: STEP face colours while the part keeps its STEP colour, otherwise white (the material colour shows). */
+function resetVertexColors(p) {
+  const arr = p.geo.attributes.color.array;
+  p.faceTint = !!p.baseCol && p.color.equals(p.defaultColor);
+  if (p.faceTint) arr.set(p.baseCol); else arr.fill(1);
+  p.geo.attributes.color.needsUpdate = true;
+}
 function applyPartLook(p) {
   p.mat = p.mats[display.look]; p.mesh.material = p.mat;
-  // a colour map paints vertex colours, so the base colour goes white while it is shown
-  p.mat.color.copy(anaState.kind ? WHITE : p.color);
+  // the user picked another colour for a part with STEP face colours: the face colours give way to it
+  if (p.baseCol && !anaState.kind && !ghost.geo && p.faceTint !== p.color.equals(p.defaultColor)) resetVertexColors(p);
+  // a colour map paints vertex colours, so the base colour goes white while it is shown; so do STEP face colours
+  p.mat.color.copy(anaState.kind || p.faceTint ? WHITE : p.color);
   if (p.alert) p.mat.color.lerp(ALERT, 0.75);
   const xr = display.look === 'xray', op = partAlpha(p);
   p.mat.transparent = xr || op < 1; p.mat.opacity = xr ? 0.65 * op : op; p.mat.depthWrite = !xr && op >= 1;
@@ -1252,6 +1312,15 @@ function showColorMenu(p, anchor) {
 // Part properties fold away (by part name, so they survive reloads); one part starts open
 const partOpen = new Set();
 let partOpenModel = null;
+/** All tree rows as wide as the widest one (long names scroll sideways together); measured while the panel is shown. */
+function fitPartRows() {
+  const el = $('partList');
+  el.style.removeProperty('--rowW');
+  const rows = [...el.querySelectorAll('.prow')];
+  const w = Math.max(0, ...rows.map(r => r.scrollWidth)) + 20;   // + the row's padding and border
+  if (rows.length && w > el.clientWidth) el.style.setProperty('--rowW', `${w}px`);
+}
+new ResizeObserver(() => fitPartRows()).observe($('pside'));
 function renderParts() {
   const el = $('partList');
   if (partOpenModel !== model.info?.path) { partOpenModel = model.info?.path; partOpen.clear(); if (model.parts.length === 1) partOpen.add(model.parts[0].name); }
@@ -1260,12 +1329,11 @@ function renderParts() {
     const s = p.bbox.getSize(new THREE.Vector3());
     return `<div class="item ${partOpen.has(p.name) ? 'open' : ''}" data-i="${p.index}" ${q && !p.name.toLowerCase().includes(q) ? 'hidden' : ''}><div class="prow">
       <span class="t grow tog" data-a="tog" title="${esc(p.name)}">${esc(p.name)}</span>
-      <button class="car" data-a="tog" title="Details">▸</button>
+      <span class="icons"><button class="car" data-a="tog" title="Details">▸</button>
       <button class="pico ${p.visible ? '' : 'off'}" data-a="vis" title="${p.visible ? 'Hide' : 'Show'}">${p.visible ? PI.eye : PI.eyeOff}</button>
       <button class="pico" data-a="disp" title="Display style: ${PI.dispLabel[p.mode || '']}">${PI.disp(p.mode)}</button>
       <button class="pico" data-a="col" title="Colour"><span class="swc" style="background:#${p.color.getHexString()}"></span></button>
-      <button class="pico ${p.transp ? 'act' : ''}" data-a="tr" title="Transparent: ${p.transp ? 'yes' : 'no'}">${PI.trans(p.transp)}</button>
-      <button class="txt" data-a="solo" title="Show only this part">Isolate</button><button class="pico" data-a="focus" title="Focus">${PI.focus}</button></div>
+      <button class="pico ${p.transp ? 'act' : ''}" data-a="tr" title="Transparent: ${p.transp ? 'yes' : 'no'}">${PI.trans(p.transp)}</button></span></div>
       <div class="props"><div class="d">${fmtn(s.x)} × ${fmtn(s.y)} × ${fmtn(s.z)} mm · ${fmtn(p.an.volume, 1)} mm³ · ${p.an.faces.length} faces, ${p.an.edges.length} edges</div></div></div>`;
   }).join('');
   el.querySelectorAll('.item').forEach(it => {
@@ -1275,9 +1343,8 @@ function renderParts() {
     it.querySelector('[data-a=col]').onclick = e => showColorMenu(p, e.currentTarget);
     it.querySelector('[data-a=tr]').onclick = () => { p.transp = !p.transp; applyPartLook(p); renderParts(); };
     it.querySelectorAll('[data-a=tog]').forEach(t => t.onclick = () => { if (it.classList.toggle('open')) partOpen.add(p.name); else partOpen.delete(p.name); });
-    it.querySelector('[data-a=solo]').onclick = () => isolate([p]);
-    it.querySelector('[data-a=focus]').onclick = () => fitTo(p.bbox.clone().translate(p.group.position).getBoundingSphere(new THREE.Sphere()));
   });
+  fitPartRows();
   const size = model.bbox ? model.bbox.getSize(new THREE.Vector3()) : null;
   const faces = model.parts.reduce((s, p) => s + p.an.faces.length, 0), edges = model.parts.reduce((s, p) => s + p.an.edges.length, 0);
   $('modelInfo').innerHTML = size ? `Source: ${esc(model.source)}<br>Size: ${fmtn(size.x)} × ${fmtn(size.y)} × ${fmtn(size.z)} mm<br>Faces: ${faces}, edges: ${edges}<br><span class="mono">${esc(model.info?.path)}</span>` : '';
@@ -1373,7 +1440,7 @@ function clearGhost() {
   if (ghost.mesh) { scene.remove(ghost.mesh); ghost.geo.dispose(); ghost.mesh.material.dispose(); }
   if (ghost.removed) { scene.remove(ghost.removed); ghost.removed.geometry.dispose(); ghost.removed.material.dispose(); ghost.removed = null; }
   ghost.id = null; ghost.mesh = null; ghost.geo = null;
-  for (const p of model.parts) { p.geo.attributes.color.array.fill(1); p.geo.attributes.color.needsUpdate = true; }
+  for (const p of model.parts) resetVertexColors(p);
   $('ghostName').textContent = 'none'; $('diffStats').textContent = '';
   renderVersions();
 }
@@ -1414,7 +1481,7 @@ function computeDiff() {
   const cen = new THREE.Vector3();
   let changedArea = 0, totalArea = 0;
   for (const p of model.parts) {
-    const col = p.geo.attributes.color.array; col.fill(1);
+    resetVertexColors(p); const col = p.geo.attributes.color.array;
     if (!p.bvh) p.bvh = new MeshBVH(p.bvhGeo);
     if (on) {
       const P = p.geo.attributes.position, I = p.an.index;
@@ -1950,7 +2017,7 @@ $('measMode').onchange = () => { setTool('measure'); };
 $('selFilter').onchange = () => setTool('select');
 document.querySelectorAll('.sw').forEach(b => b.onclick = () => { document.querySelectorAll('.sw').forEach(x => x.classList.remove('on')); b.classList.add('on'); penColor = b.dataset.c; setTool('pen'); });
 
-let downAt = null, rightDownAt = null, lastPointer = null, cubeDown = null;
+let downAt = null, rightDownAt = null, midDownAt = null, lastPointer = null, cubeDown = null;
 const cvs = renderer.domElement;
 // middle drag rotates, right drag and Ctrl + middle drag pan. Set before TrackballControls reads the press.
 cvs.addEventListener('pointerdown', ev => { controls.mouseButtons = ev.button === 1 && ev.ctrlKey ? { LEFT: -1, MIDDLE: -1, RIGHT: 1 } : ev.button === 2 ? { LEFT: -1, MIDDLE: -1, RIGHT: 2 } : { LEFT: 1, MIDDLE: -1, RIGHT: -1 }; }, true);
@@ -1970,6 +2037,7 @@ cvs.addEventListener('pointerdown', ev => {
   $('pinpop').style.display = 'none';
   closeMenus();
   if (ev.button === 2) rightDownAt = { x: ev.clientX, y: ev.clientY };
+  if (ev.button === 1) midDownAt = { x: ev.clientX, y: ev.clientY };
   // pivot under the cursor but at the target depth: a pivot on the grabbed surface freezes that point on screen, which feels heavy
   if (ev.button === 1 && !ev.ctrlKey && controls.enabled) { const h = faceHit(ev)?.world, v = camera.getWorldDirection(new THREE.Vector3()); pivot = h ? h.addScaledVector(v, -v.dot(h.clone().sub(controls.target))) : null; pivotQ.copy(camera.quaternion); }
   if (ev.button !== 0) return;
@@ -2015,7 +2083,15 @@ cvs.addEventListener('pointermove', ev => {
 const endStroke = () => { active = null; };
 cvs.addEventListener('pointerup', ev => {
   // keep the pivot for the controls' last update (next frame), then drop it so view animations are not corrected
-  if (ev.button === 1) { const p = pivot; requestAnimationFrame(() => { if (pivot === p) pivot = null; }); }
+  if (ev.button === 1) {
+    const p = pivot; requestAnimationFrame(() => { if (pivot === p) pivot = null; });
+    // a middle click (not a rotate drag) in Measure deletes all dimensions
+    const click = midDownAt && Math.hypot(ev.clientX - midDownAt.x, ev.clientY - midDownAt.y) <= 5;
+    midDownAt = null;
+    if (click && tool === 'measure' && (measurements.length || measPicks.length)) {
+      const n = measurements.length; clearMeasurements(); toast(`Deleted ${n} dimension(s).`);
+    }
+  }
   if (active) { endStroke(); return; }
   if (ev.button !== 0 || !downAt || Math.hypot(ev.clientX - downAt.x, ev.clientY - downAt.y) > 5) return;
   if (cubeDown) { const d = cubeDir(ev); cubeDown = null; if (d) setView('', true, d); return; }
@@ -2061,6 +2137,24 @@ function targetParts() {
   if (sel.length) return sel;
   const h = lastPointer && faceHit(lastPointer);
   return h ? [model.parts[h.part]] : [];
+}
+// Shift pressed and released on its own (no click, no other key in between) = reveal; Shift+click keeps adding to the selection
+let shiftAlone = false;
+addEventListener('pointerdown', () => { shiftAlone = false; }, true);
+addEventListener('keyup', e => {
+  if (e.key !== 'Shift' || !shiftAlone) return;
+  shiftAlone = false;
+  if (!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) revealPartUnderCursor();
+});
+function revealPartUnderCursor() {
+  const h = lastPointer && model.parts.length > 1 && faceHit(lastPointer);
+  if (!h) return;
+  $('pside').classList.remove('hidden');
+  if ($('partsFilter').value) { $('partsFilter').value = ''; renderParts(); }
+  const it = document.querySelector(`#partList .item[data-i="${h.part}"]`);
+  if (!it) return;
+  it.scrollIntoView({ block: 'center', inline: 'start', behavior: 'smooth' });
+  it.classList.remove('flash'); void it.offsetWidth; it.classList.add('flash');
 }
 let isolated = null;   // visibility before I was pressed
 function isolate(parts) {
@@ -2154,7 +2248,7 @@ async function saveShot() {
 }
 $('bShot').onclick = () => saveShot().catch(e => toast('Could not save the screenshot: ' + e.message, true));
 $('bFit').onclick = () => setView('', true, camera.position.clone().sub(controls.target).normalize().toArray());
-const DISP = [['dEdges', 'edges'], ['dWire', 'wire'], ['dGrid', 'grid'], ['dAxes', 'axes'], ['dShadow', 'shadow'], ['dAO', 'ao'], ['dCube', 'cube']];
+const DISP = [['dEdges', 'edges'], ['dWire', 'wire'], ['dGrid', 'grid'], ['dAxes', 'axes'], ['dShadow', 'shadow'], ['dAO', 'ao'], ['dCube', 'cube'], ['dTriad', 'triad']];
 function applyDisplay() {
   renderer.shadowMap.enabled = display.shadow; sunLight.castShadow = display.shadow; sunLight.intensity = display.shadow ? 1.7 : 0;
   camLight.intensity = camLight2.intensity = display.shadow ? 0.6 : 1.5;   // the sun takes over so its shadows read
@@ -2163,7 +2257,7 @@ function applyDisplay() {
   grid.visible = display.grid; axes.visible = display.axes;
   for (const [id, k] of DISP) $(id).checked = display[k];
   document.querySelectorAll('#lookSeg button').forEach(b => b.classList.toggle('on', b.dataset.l === display.look));
-  try { localStorage.setItem('cadp.display', JSON.stringify({ ...display, axes: undefined }));  /* axes always start hidden */ } catch { /* per-viewer convenience only */ }
+  try { localStorage.setItem('cadp.display', JSON.stringify({ ...display, axes: undefined, v: 2 }));  /* axes always start hidden */ } catch { /* per-viewer convenience only */ }
 }
 for (const [id, k] of DISP) $(id).onchange = e => { display[k] = e.target.checked; applyDisplay(); };
 document.querySelectorAll('#lookSeg button').forEach(b => b.onclick = () => { display.look = b.dataset.l; applyDisplay(); });
@@ -2283,6 +2377,9 @@ addEventListener('keydown', e => {
   if ($('help').classList.contains('open')) { if (e.key === 'Escape' || e.key === '?') $('help').classList.remove('open'); return; }
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
   const k = e.key.toLowerCase();
+  // Shift alone over a part: find it in the parts tree (Shift+click still adds to the selection)
+  if (e.key === 'Shift') { if (!e.repeat) shiftAlone = !e.ctrlKey && !e.altKey && !e.metaKey; return; }
+  shiftAlone = false;
   if (e.ctrlKey || e.metaKey || e.altKey) { if (k === 'z' && !e.altKey) { undoStroke(); e.preventDefault(); } return; }
   if (k === 'escape') { closeMenus(); if (measPicks.length) setTool('measure'); else if (markDraft || markSel >= 0) { markDraft = null; markSel = -1; markEdit = false; drawMarkers(); hint(); } else { clearSelection(); $('pinpop').style.display = 'none'; clearNoteOverlay(); activePin = null; renderPins(); } }
   else if (k === 'h' && e.shiftKey) { isolated = null; setPartsVisible(() => true); }
@@ -2666,7 +2763,7 @@ function runAnalysis() {
   $('legend').classList.add('on');
 }
 function clearColours() {
-  for (const p of model.parts) { p.geo.attributes.color.array.fill(1); p.geo.attributes.color.needsUpdate = true; }
+  for (const p of model.parts) resetVertexColors(p);
   if (ghost.geo) computeDiff();
 }
 function setAnalysis(kind) {
@@ -2829,7 +2926,8 @@ $('helpClose').onclick = () => $('help').classList.remove('open');
 $('help').addEventListener('pointerdown', e => { if (e.target === $('help')) $('help').classList.remove('open'); });
 
 // ================================================================= start
-try { const { axes: _, ...saved } = JSON.parse(localStorage.getItem('cadp.display') || '{}'); Object.assign(display, saved); } catch { /* defaults */ }
+// v2: the grid starts off; settings saved before that keep everything except the grid
+try { const { axes: _, v, ...saved } = JSON.parse(localStorage.getItem('cadp.display') || '{}'); if (v !== 2) delete saved.grid; Object.assign(display, saved); } catch { /* defaults */ }
 applyDisplay();
 initAnalysis();
 if (location.search.includes('selftest')) { const ok = ana.selfTest(); toast(ok ? 'Self-test passed' : 'Self-test FAILED', !ok); }

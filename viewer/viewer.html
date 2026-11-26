@@ -10,9 +10,15 @@
   --bg:#1f1e1d;--bg2:#262624;--panel:#2a2927;--panel2:#33322f;--hov:#3a3936;--line:#3d3c38;--line2:#4d4b46;
   --text:#faf9f5;--dim:#c2c0b6;--faint:#8e8c84;--accent:#d97757;--accent-h:#c6613f;--accent-bg:rgba(217,119,87,.16);
   --accent2:#7fa7d6;--ok:#7cbf8a;--warn:#e3a957;--bad:#e5655a;
-  --r:10px;--fs:12.5px
+  --on:#f3c2ae;--r:10px;--fs:12.5px;color-scheme:dark
 }
 *{box-sizing:border-box}
+/* dark scrollbars in the app's palette (Chromium/Edge use ::-webkit-*, Firefox scrollbar-color) */
+*{scrollbar-color:var(--line2) transparent;scrollbar-width:thin}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:6px;border:2px solid var(--panel)}
+::-webkit-scrollbar-thumb:hover{background:var(--faint)}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:var(--fs)/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
 button,input,select,textarea{font:inherit;color:inherit}
 button{background:transparent;border:1px solid transparent;border-radius:7px;padding:4px 9px;cursor:pointer;white-space:nowrap;color:var(--text);display:inline-flex;align-items:center;gap:5px}
@@ -148,7 +154,15 @@ h4:first-child{margin-top:4px}
 #title{position:absolute;top:10px;left:12px;pointer-events:none;text-shadow:0 1px 2px #000}
 #title b{font-size:13.5px}
 #title .d{color:var(--dim);font-size:11.5px}
-#hint{position:absolute;left:12px;bottom:9px;color:var(--faint);font-size:11.5px;pointer-events:none;text-shadow:0 1px 2px #000;max-width:calc(100% - 260px)}
+/* parts tree: long names scroll sideways instead of being cut; the icons stay pinned on the right */
+/* every row as wide as the longest name (--rowW, set by renderParts), so the rows scroll together */
+#partList{overflow-x:auto;padding-bottom:2px}
+#partList .item{min-width:var(--rowW,auto)}
+#partList .item .t.tog{overflow:visible;text-overflow:clip;flex:1 0 auto}
+#partList .prow .icons{display:flex;align-items:center;gap:2px;position:sticky;right:10px;background:var(--bg2);padding-left:4px;box-shadow:-8px 0 8px -4px var(--bg2)}
+#partList .item.flash{animation:pflash 1.4s ease-out}
+@keyframes pflash{0%,40%{border-color:var(--accent);background:var(--accent-bg)}100%{}}
+#hint{position:absolute;left:104px;bottom:9px;color:var(--faint);font-size:11.5px;pointer-events:none;text-shadow:0 1px 2px #000;max-width:max(200px,calc(100% - 360px))}
 #legend{position:absolute;right:12px;bottom:10px;display:none;background:rgba(42,41,39,.92);border:1px solid var(--line2);border-radius:10px;padding:7px 9px;font-size:11.5px;pointer-events:none;max-width:230px}
 #legend.on{display:block}
 #legend .t{font-weight:600;margin-bottom:3px}
@@ -257,9 +271,10 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
           <label class="ck"><input type="checkbox" id="dWire"> Wireframe</label>
           <label class="ck"><input type="checkbox" id="dShadow"> Shadows</label>
           <label class="ck"><input type="checkbox" id="dAO"> Ambient occlusion</label>
-          <label class="ck"><input type="checkbox" id="dGrid" checked> Grid</label>
+          <label class="ck"><input type="checkbox" id="dGrid"> Grid</label>
           <label class="ck"><input type="checkbox" id="dAxes"> Axes</label>
           <label class="ck"><input type="checkbox" id="dCube" checked> View cube</label>
+          <label class="ck"><input type="checkbox" id="dTriad" checked> Axis triad (bottom left)</label>
         </div>
       </div>
       <div class="dd"><button id="bExportMenu" title="Export the model to another 3D format (Save as…)"><svg viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5"/><path d="M2 11v3h12v-3"/></svg><span class="lab">Export</span> ▾</button>
@@ -484,7 +499,8 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
     <div class="keys">
       <kbd>Mouse</kbd><span>Middle drag rotates (pivot under the cursor) · right drag or Ctrl + middle drag pans · wheel zooms</span>
       <kbd>S</kbd><span>Select (Shift+click adds)</span>
-      <kbd>M</kbd><span>Measure</span>
+      <kbd>M</kbd><span>Measure · middle click deletes all dimensions</span>
+      <kbd>Shift</kbd><span>Press and release over a part: find it in the parts tree</span>
       <kbd>D</kbd><span>Draw over the view</span>
       <kbd>K</kbd><span>Markers: click = point / line / area with a note · Delete = remove the selected one</span>
       <kbd>Enter</kbd><span>Note for Claude</span>
