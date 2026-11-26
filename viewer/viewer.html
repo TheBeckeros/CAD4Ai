@@ -37,7 +37,7 @@ input[type=range]{accent-color:var(--accent);width:100%}
 input[type=checkbox],input[type=radio]{accent-color:var(--accent)}
 input[type=color]{width:26px;height:22px;padding:0;border:1px solid var(--line);border-radius:5px;background:none}
 kbd{font:11px ui-monospace,Consolas,monospace;background:var(--bg2);border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 4px;color:var(--dim)}
-#app{display:grid;grid-template-rows:auto 1fr auto;grid-template-columns:minmax(0,1fr);height:100%}
+#app{display:grid;grid-template-rows:auto 1fr auto auto;grid-template-columns:minmax(0,1fr);height:100%}
 #bar{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:6px 8px;background:var(--panel);border-bottom:1px solid var(--line)}
 #bar .grp{display:flex;align-items:center;gap:2px;padding:0 6px 0 2px;border-right:1px solid var(--line)}
 #bar .grp:last-child{border-right:0}
@@ -159,6 +159,14 @@ h4:first-child{margin-top:4px}
 .kv span:nth-child(odd){color:var(--faint)}
 #status{display:flex;gap:12px;align-items:center;padding:3px 10px;background:var(--panel);border-top:1px solid var(--line);color:var(--dim);font-size:11.5px;white-space:nowrap;overflow:hidden}
 #status .sp{flex:1}
+/* open models as tabs along the bottom (like Inventor) */
+#mtabs{display:flex;gap:2px;padding:3px 6px 0;background:var(--bg,#1f1e1d);border-top:1px solid var(--line);overflow-x:auto;scrollbar-width:thin}
+#mtabs:empty{display:none}
+#mtabs .mt{display:flex;align-items:center;gap:6px;max-width:220px;padding:4px 6px 4px 10px;border:1px solid var(--line);border-bottom:none;border-radius:6px 6px 0 0;background:var(--panel);color:var(--dim);font-size:12px;cursor:pointer;white-space:nowrap}
+#mtabs .mt span{overflow:hidden;text-overflow:ellipsis}
+#mtabs .mt.on{color:var(--text,#eee);background:var(--panel2,#3a3836);box-shadow:inset 0 2px 0 var(--accent,#d97757)}
+#mtabs .mt button{padding:0 4px;font-size:12px;line-height:1;color:var(--dim);background:none;border:none}
+#mtabs .mt button:hover{color:var(--text,#eee)}
 #status button{padding:0 6px;font-size:11.5px;color:var(--dim)}
 #hover{overflow:hidden;text-overflow:ellipsis}
 #overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);pointer-events:none;text-align:center;padding:20px}
@@ -189,8 +197,23 @@ h4:first-child{margin-top:4px}
 #legend .k i{width:12px;height:12px;border-radius:3px;flex:none}
 #toast{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--accent);border-radius:9px;padding:7px 12px;display:none;z-index:20;max-width:90%}
 #toast.err{border-color:var(--bad)}
-#modal,#help{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:14px;z-index:50}
-#modal.open,#help.open{display:flex}
+#modal,#help,#settings,#quick{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:14px;z-index:50}
+#modal.open,#help.open,#settings.open,#quick.open{display:flex}
+/* app settings: one row per option with its explanation */
+.set{padding:9px 0;border-bottom:1px solid var(--line)}
+.set .h{display:flex;gap:10px;align-items:center;justify-content:space-between}
+.set .h b{font-weight:600}
+.set .x{color:var(--dim);font-size:12px;margin-top:3px;line-height:1.4}
+.set .x em{color:var(--text);font-style:normal}
+.set select{max-width:55%}
+.set-sec{margin:14px 0 2px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.param .why{display:block;color:var(--accent);font-size:11px;grid-column:1/-1}
+.pgh.rel{color:var(--accent)}
+.pgh .relx{margin-left:auto;padding:0 6px;background:none;border:none;color:var(--dim)}
+.qchips{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+.qchips button{font:11.5px ui-monospace,Consolas,monospace;padding:2px 6px}
+#sweepBox summary{cursor:pointer;color:var(--dim);margin:8px 0 4px}
+#sweepBox .row input{width:70px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;width:min(500px,100%);max-height:100%;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.5)}
 .card h3{margin:0 0 8px;font-size:15px}
 .card img{width:100%;border-radius:8px;border:1px solid var(--line);margin:6px 0;background:var(--bg)}
@@ -488,6 +511,14 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
             <button id="paramApply" class="primary">Apply</button>
           </div>
           <div id="paramState" class="muted"></div>
+          <div id="paramCheck" class="d muted"></div>
+          <details id="sweepBox">
+            <summary title="Rebuild the model for several values of one parameter and save each as a design variant (no Claude, no tokens)">Variants from one parameter</summary>
+            <div class="row"><select id="swName" class="grow" title="Parameter"></select></div>
+            <div class="row"><label>From <input type="number" id="swFrom"></label><label>To <input type="number" id="swTo"></label><label>Step <input type="number" id="swStep"></label></div>
+            <div class="row"><span id="swInfo" class="muted grow"></span><button id="swRun" class="ghost">Make variants</button></div>
+            <div class="d muted">Each value is saved as <span class="mono">model@NAME=value.step</span> next to the model; pick them in the variant switcher. The script goes back to the current value afterwards. Max 12 values.</div>
+          </details>
           <div id="paramLog" class="log" style="display:none"></div>
         </div>
         <!-- MOTION (shown for assemblies; joints come from <model>.motion.json) -->
@@ -512,7 +543,8 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
       </div>
     </div>
   </div>
-  <div id="status"><span id="hover"></span><span class="sp"></span><span id="units">mm</span><span id="src"></span><button id="bHelp" title="Keyboard shortcuts (?)">? Shortcuts</button></div>
+  <div id="mtabs" role="tablist" aria-label="Open models"></div>
+  <div id="status"><span id="hover"></span><span class="sp"></span><span id="units">mm</span><span id="src"></span><button id="bSettings" title="Settings for the whole app: what notes for Claude contain, checks after a rebuild">⚙ Settings</button><button id="bHelp" title="Keyboard shortcuts (?)">? Shortcuts</button></div>
 </div>
 
 <div id="modal">
@@ -523,6 +555,24 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
     <textarea id="mText" placeholder="What should change? E.g. “M5 through hole here”, “chamfer this edge 2 mm”, “this dimension should be 25 mm”…"></textarea>
     <div class="muted" style="margin-top:4px">Claude gets this screenshot (the numbers and letters on it match the note) and the exact geometry of everything ticked above.</div>
     <div class="foot"><button id="mCancel" class="ghost">Cancel</button><button id="mSend" class="primary">Send to Claude</button></div>
+  </div>
+</div>
+<div id="settings">
+  <div class="card" style="width:min(560px,100%)">
+    <div class="row" style="margin:0"><h3 style="margin:0">Settings</h3><span class="grow"></span><button class="icon" id="setClose" aria-label="Close">✕</button></div>
+    <div class="muted">For the whole app: every model and project. Saved on this computer and applied at once.</div>
+    <div id="setList"></div>
+    <div class="foot"><button id="setReset" class="ghost">Defaults</button><button id="setOk" class="primary">Done</button></div>
+  </div>
+</div>
+<div id="quick">
+  <div class="card">
+    <h3>Quick change</h3>
+    <div id="qWhere" class="muted"></div>
+    <div id="qChips" class="qchips"></div>
+    <textarea id="qText" placeholder="Only what should change, e.g. “this hole Ø13”, “move it 20 mm up”, “SOCKET_FROM_TOP 220”…"></textarea>
+    <div class="muted" id="qInfo" style="margin-top:4px"></div>
+    <div class="foot"><button id="qCancel" class="ghost">Cancel</button><button id="qSend" class="primary">Send to Claude</button></div>
   </div>
 </div>
 <div id="help">
@@ -548,7 +598,7 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
       <kbd>X</kbd><span>Section on / off</span>
       <kbd>[ ]</kbd><span>Previous / next design variant</span>
       <kbd>Esc</kbd><span>Clear selection, close menus</span>
-      <span style="color:var(--text)">Right-click</span><span>Part menu: hide, isolate, transparency, look at face</span>
+      <span style="color:var(--text)">Right-click</span><span>Part menu: hide, isolate, transparency, look at face, related parameters, quick change</span>
     </div>
     <div class="foot"><button id="helpClose" class="primary">Close</button></div>
   </div>

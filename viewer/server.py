@@ -63,6 +63,9 @@ import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import assist  # noqa: E402
+
 import canvas as CV
 import project as PROJ
 
@@ -925,6 +928,17 @@ class Handler(BaseHTTPRequestHandler):
                 if not path.lower().endswith(MODEL_EXT) or not os.path.isfile(path):
                     return self._send(404, {"error": "not found"})
                 return self._file(path)
+            if url.path == "/api/settings":
+                return self._send(200, {"values": assist.load_settings(), "defaults": assist.DEFAULTS})
+            if url.path == "/api/check":
+                cur = current()
+                step = cur.get("step") or (cur.get("path") if (cur.get("path") or "").lower().endswith((".step", ".stp")) else None)
+                if not step:
+                    return self._send(404, {"error": "no STEP model"})
+                try:
+                    return self._send(200, assist.check_model(step))
+                except (subprocess.SubprocessError, OSError) as e:
+                    return self._send(200, {"ok": False, "error": str(e)})
             if url.path == "/api/stepcolors":
                 path = (q.get("path") or [""])[0]
                 if not path.lower().endswith((".step", ".stp")) or not os.path.isfile(path):
@@ -1142,13 +1156,19 @@ class Handler(BaseHTTPRequestHandler):
                     body["screenshot"] = png
                 # where to make the change: the parametric script and its parameters (names and values)
                 try:
-                    script = current().get("script")
+                    cur = current()
+                    script = cur.get("script")
+                    ps = []
                     if script:
                         body["script"] = script
-                        body["params"] = [f"{p['name']} = {p['value']}" + (f" [{p['unit']}]" if p["unit"] else "")
-                                          for p in parse_params(script)][:60]
+                        ps = parse_params(script)
+                        body["params"] = [f"{p['name']} = {p['value']}" + (f" [{p['unit']}]" if p["unit"] else "") for p in ps][:60]
+                    # settings: fewer parts and parameters, a script map, a model hint (saves tokens)
+                    if body.get("kind") in (None, "quick"):
+                        assist.shape_note(body, cur, ps, assist.load_settings(), quick=body.get("kind") == "quick")
                 except Exception:  # noqa: BLE001 - a script that does not parse must not lose the note
                     pass
+                body.pop("nearParts", None)
                 body["id"] = sid
                 body["created"] = time.time()
                 tmp = os.path.join(inbox, f"{sid}.tmp")
@@ -1230,6 +1250,31 @@ class Handler(BaseHTTPRequestHandler):
                     write_json(path, status)
                 return self._send(200, {"ok": True})
 
+            if url.path == "/api/settings":
+                return self._send(200, {"values": assist.save_settings(body.get("values") or {})})
+            if url.path == "/api/related":
+                cur = current()
+                script = cur.get("script")
+                if not script:
+                    return self._send(200, {"params": [], "lines": [], "error": "no parametric script for this model"})
+                try:
+                    ps = parse_params(script)
+                    rel, lines = assist.related_for(script, [x for x in (body.get("parts") or []) if isinstance(x, str)],
+                                                    body.get("values") or [], ps, assist.load_settings())
+                    return self._send(200, {"params": rel, "lines": lines, "script": script})
+                except (SyntaxError, OSError, ValueError) as e:
+                    return self._send(200, {"params": [], "lines": [], "error": f"{type(e).__name__}: {e}"})
+            if url.path == "/api/sweep":
+                cur = current()
+                if not RUN_LOCK.acquire(blocking=False):
+                    return self._send(409, {"error": "script is already running"})
+                try:
+                    vals = [float(v) for v in body.get("values") or []]
+                    return self._send(200, assist.sweep(cur, str(body.get("name", "")), vals, write_params, run_script, parse_params))
+                except ValueError as e:
+                    return self._send(400, {"error": str(e)})
+                finally:
+                    RUN_LOCK.release()
             if url.path == "/api/params":
                 cur = current()
                 script = cur.get("script")

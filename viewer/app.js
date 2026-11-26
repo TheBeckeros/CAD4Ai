@@ -290,6 +290,7 @@ function disposeModel() {
 }
 
 async function loadModel(info, keepCamera) {
+  if (model.info && tabKey(model.info.path) !== tabKey(info.path)) rememberTabCamera();
   $('loading').classList.add('on');
   await seedProjectState(info);
   let srcs, source;
@@ -331,7 +332,7 @@ async function loadModel(info, keepCamera) {
   placeSun();
   anaState.thick.clear(); anaState.colliding = null;
   applyExplode(); applyDisplay();
-  if (!keepCamera) setView('iso', false);
+  if (!tabLoaded(info, keepCamera) && !keepCamera) setView('iso', false);
   updateSection(true);
   $('overlay').style.display = 'none';
   const vol = model.parts.reduce((s, p) => s + p.an.volume, 0);
@@ -345,9 +346,67 @@ async function loadModel(info, keepCamera) {
     const tot = (performance.now() - paramT.t0 + paramT.script) / 1000;
     renderParamsState(`Done in ${tot.toFixed(1)} s (script ${(paramT.script / 1000).toFixed(2)} s${paramT.warm === false ? ', cold start' : ''}, model reload ${((performance.now() - paramT.t0) / 1000).toFixed(1)} s): ${paramT.changes.join(', ')}`);
     paramT = null;
+    afterRebuildChecks();
   }
   if (anaState.kind === 'collide') runCollisions(); else if (anaState.kind) runAnalysis();
 }
+
+// ============================================================== model tabs
+// Open models as tabs along the bottom. A tab is just the model's path: switching calls /api/open, so
+// parameters, notes, versions and paint go to that model's own files. The camera is kept per tab.
+// Variants (name@label.step) share one tab that follows the variant picked.
+const TABS_KEY = 'cadp.mtabs';
+const tabKey = path => path.replace(/@[^\\/]*(\.(step|stp|stl))$/i, '$1').toLowerCase();
+let mtabs = (() => { try { return JSON.parse(localStorage.getItem(TABS_KEY) || '[]'); } catch { return []; } })();
+const saveTabs = () => { try { localStorage.setItem(TABS_KEY, JSON.stringify(mtabs)); } catch { /* per-viewer convenience */ } };
+function tabCamera() {
+  return { p: camera.position.toArray(), t: controls.target.toArray(), u: camera.up.toArray(), z: ortho.zoom };
+}
+function rememberTabCamera() {
+  const t = model.info && mtabs.find(x => x.key === tabKey(model.info.path));
+  if (t) { t.cam = tabCamera(); saveTabs(); }
+}
+/** After a model loaded: make sure it has a tab, mark it active; true when that tab had a camera to restore. */
+function tabLoaded(info, keepCamera) {
+  const key = tabKey(info.path);
+  let t = mtabs.find(x => x.key === key);
+  if (!t) { t = { key }; mtabs.push(t); }
+  t.path = info.path; t.name = info.name.replace(/\.(step|stp|stl)$/i, '');
+  let restored = false;
+  if (!keepCamera && t.cam) {
+    ortho.zoom = t.cam.z || 1; ortho.updateProjectionMatrix();
+    flyTo(new THREE.Vector3(...t.cam.p), new THREE.Vector3(...t.cam.t), new THREE.Vector3(...t.cam.u), false);
+    restored = true;
+  }
+  saveTabs(); renderTabs();
+  return restored;
+}
+function renderTabs() {
+  const el = $('mtabs'), cur = model.info && tabKey(model.info.path);
+  el.innerHTML = mtabs.length < 2 && !cur ? '' : mtabs.map((t, i) => `<div class="mt ${t.key === cur ? 'on' : ''}" role="tab" aria-selected="${t.key === cur}" data-i="${i}" title="${esc(t.path)}"><span>${esc(t.name)}</span><button data-a="x" title="Close tab" aria-label="Close ${esc(t.name)}">✕</button></div>`).join('');
+  el.querySelectorAll('.mt').forEach(d => {
+    const t = mtabs[+d.dataset.i];
+    d.onclick = e => { if (e.target.dataset.a === 'x') closeTab(t); else switchTab(t); };
+    d.onauxclick = e => { if (e.button === 1) closeTab(t); };
+  });
+  el.querySelector('.mt.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+async function switchTab(t) {
+  if (model.info && tabKey(model.info.path) === t.key) return;
+  rememberTabCamera();
+  try { await api('/api/open', { path: t.path }); await checkLatest(); }
+  catch (e) {
+    toast('Could not open ' + t.name + ': ' + e.message, true);
+    mtabs = mtabs.filter(x => x !== t); saveTabs(); renderTabs();
+  }
+}
+function closeTab(t) {
+  const i = mtabs.indexOf(t), active = model.info && tabKey(model.info.path) === t.key;
+  mtabs.splice(i, 1); saveTabs();
+  if (active && mtabs.length) switchTab(mtabs[Math.min(i, mtabs.length - 1)]);
+  else renderTabs();
+}
+addEventListener('beforeunload', rememberTabCamera);
 
 let checking = null;
 /** Look for a new model or changed side files now (also called right after a parameter rebuild). */
@@ -2181,6 +2240,9 @@ setPaintColor(paintColor);
 // ============================================================= parameters
 let params = [], paramEdits = {}, paramBusy = false, liveT = null, paramScript = '', paramT = null;
 let paramFilter = 'all';
+const REL_G = '@@related';
+let relState = null;   // {label, list: [{name, score, why}]} from the context menu
+const relWhy = p => { const r = relState?.list.find(x => x.name === p.name); return r ? `<span class="why">◎ ${esc(r.why)}</span>` : ''; };
 const paramGrpClosed = new Set();
 // per script, in this browser: the values first seen (to reset to) and the pinned parameters
 const pKey = k => `cadp.param${k}:${paramScript}`;
@@ -2190,6 +2252,7 @@ let paramOrig = {}, paramPins = new Set();
 async function loadParams() {
   let res;
   try { res = await api('/api/params'); } catch { res = { params: [] }; }
+  if (res.script !== paramScript) relState = null;
   params = res.params || []; paramEdits = {};
   paramScript = res.script || '';
   paramOrig = pLoad('Orig', {}); paramPins = new Set(pLoad('Pins', []));
@@ -2200,7 +2263,7 @@ async function loadParams() {
     ? `Script: <span class="mono">${esc(res.script.split(/[\\/]/).pop())}</span> · ${params.length} parameter${params.length === 1 ? '' : 's'}${res.error ? `<div style="color:var(--bad)">${esc(res.error)}</div>` : ''}`
     : 'No parametric script found for this model (a .py file in the same folder that mentions the model file name).';
   $('paramTools').style.display = params.length > 3 ? '' : 'none';
-  renderParams();
+  renderParams(); renderSweep();
 }
 function paramStep(p) {
   if (p.type === 'int') return 1;
@@ -2214,7 +2277,7 @@ function paramHtml(p) {
   const orig = paramOrig[p.name], off = orig !== undefined && v !== orig;
   const tools = `<span class="ptools"><button class="pico ${paramPins.has(p.name) ? 'act' : ''}" data-pin="${p.name}" title="${paramPins.has(p.name) ? 'Unpin' : 'Pin to the top'}">${paramPins.has(p.name) ? '★' : '☆'}</button>${off ? `<button class="pico" data-reset="${p.name}" title="Back to the original value ${esc(String(orig))}">↺</button>` : ''}</span>`;
   const cls = `param ${pending ? 'changed' : ''} ${off ? 'off' : ''}`;
-  if (p.type === 'bool') return `<div class="${cls}" data-p="${p.name}"><span class="nm">${esc(p.name)}${tools}</span><input type="checkbox" data-n="${p.name}" ${v ? 'checked' : ''}><span class="cm">${esc(p.comment)}</span></div>`;
+  if (p.type === 'bool') return `<div class="${cls}" data-p="${p.name}"><span class="nm">${esc(p.name)}${tools}</span><input type="checkbox" data-n="${p.name}" ${v ? 'checked' : ''}><span class="cm">${esc(p.comment)}</span>${relWhy(p)}</div>`;
   const step = paramStep(p);
   let min, max;
   if (p.min !== undefined) { min = p.min; max = p.max; }
@@ -2226,7 +2289,7 @@ function paramHtml(p) {
   return `<div class="${cls}" data-p="${p.name}"><span class="nm">${esc(p.name)}${tools}</span>
       <span><input type="number" data-n="${p.name}" value="${v}" step="${step}" ${p.min !== undefined ? `min="${p.min}" max="${p.max}"` : ''} ${out ? 'class="bad"' : ''}> <span class="muted">${esc(p.unit)}</span></span>
       <input type="range" data-r="${p.name}" min="${min}" max="${max}" step="${step}" value="${v}">
-      <span class="cm">${esc(p.comment)}</span></div>`;
+      <span class="cm">${esc(p.comment)}</span>${relWhy(p)}</div>`;
 }
 function renderParams() {
   const el = $('paramList');
@@ -2238,13 +2301,19 @@ function renderParams() {
   const groups = new Map();
   const pinned = paramFilter !== 'pinned' ? shown.filter(p => paramPins.has(p.name)) : [];
   if (pinned.length) groups.set('★ Pinned', pinned);
-  for (const p of shown) { if (pinned.includes(p)) continue; const g = p.group || ''; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); }
+  // related to the right-clicked place (context menu): their own group at the top, best first
+  const rel = relState ? relState.list.map(r => shown.find(p => p.name === r.name)).filter(p => p && !pinned.includes(p)) : [];
+  if (rel.length) groups.set(REL_G, rel);
+  for (const p of shown) { if (pinned.includes(p) || rel.includes(p)) continue; const g = p.group || ''; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); }
   const many = groups.size > 1 || [...groups.keys()].some(Boolean);
   el.innerHTML = [...groups].map(([g, ps]) => {
     const open = q || !paramGrpClosed.has(g);
-    const head = many ? `<div class="pgh ${open ? 'open' : ''}" data-g="${esc(g)}"><span class="gcar">▸</span> ${esc(g || 'Other')} <span class="muted">${ps.length}</span></div>` : '';
+    const head = g === REL_G
+      ? `<div class="pgh rel ${open ? 'open' : ''}" data-g="${esc(g)}" title="Found in the script: where the part is built and what feeds it; values equal to the clicked size"><span class="gcar">▸</span> ◎ Related: ${esc(relState.label)} <span class="muted">${ps.length}</span><button class="relx" data-a="relx" title="Back to the normal order" aria-label="Clear related">✕</button></div>`
+      : many ? `<div class="pgh ${open ? 'open' : ''}" data-g="${esc(g)}"><span class="gcar">▸</span> ${esc(g || 'Other')} <span class="muted">${ps.length}</span></div>` : '';
     return head + (open || !many ? ps.map(paramHtml).join('') : '');
   }).join('') || `<div class="muted" style="padding:8px 0">${params.length ? 'No parameter matches.' : ''}</div>`;
+  el.querySelector('[data-a=relx]')?.addEventListener('click', e => { e.stopPropagation(); relState = null; renderParams(); });
   el.querySelectorAll('.pgh').forEach(h => h.onclick = () => { const g = h.dataset.g; if (paramGrpClosed.has(g)) paramGrpClosed.delete(g); else paramGrpClosed.add(g); renderParams(); });
   el.querySelectorAll('[data-pin]').forEach(b => b.onclick = () => { const n = b.dataset.pin; if (paramPins.has(n)) paramPins.delete(n); else paramPins.add(n); pSave('Pins', [...paramPins]); renderParams(); });
   el.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => {
@@ -2407,7 +2476,8 @@ async function sendNote() {
         ...(section.extra.some(e => e.on) ? { extraPlanes: section.extra.filter(e => e.on).map(e => ({ normal: arr(e.plane.normal), constant: r2(e.plane.constant) })) } : {}) },
     camera: { position: arr(camera.position), target: arr(controls.target), up: arr(camera.up), viewDir: arr(camDir), ortho: camera === ortho },
     explode: r2(explode), anchor, anchorPart, parts: model.parts.map(p => p.name), source: model.source,
-    image: $('mShot').src,
+    nearParts: nearPartNames([...featuresD.map(f => f.point || f.centroid), ...strokesD.flatMap(s => s.points || [s.center]), ...markD.flatMap(m => m.points || []), ...measD.flatMap(m => [m.from, m.to]), anchor]),
+    image: appSettings['note.screenshot'] === false ? '' : $('mShot').src,
   };
   $('mSend').disabled = true;
   try {
@@ -2568,6 +2638,8 @@ cvs.addEventListener('contextmenu', ev => {
     <button class="mi" data-a="solo">${isolated ? 'Show the others again' : 'Isolate'} <kbd>I</kbd></button>
     <button class="mi" data-a="look">Look at this face <kbd>N</kbd></button>
     <button class="mi" data-a="focus">Zoom to this part</button>
+    ${paramScript ? `<button class="mi" data-a="rel" title="Group the parameters that drive this part or this place at the top of the Params tab">Show related parameters</button>
+    <button class="mi" data-a="quick" title="A short request for Claude about this place: few tokens, no screenshot by default">Quick change…</button>` : ''}
     ${model.parts.some(q => !q.visible) ? '<button class="mi" data-a="all">Show all parts <kbd>Shift+H</kbd></button>' : ''}`;
   const vr = view.getBoundingClientRect();
   pop.style.display = 'block';
@@ -2577,6 +2649,7 @@ cvs.addEventListener('contextmenu', ev => {
   pop.querySelector('[data-a=tr]').onchange = e => { p.transp = e.target.checked; applyPartLook(p); renderParts(); };
   const acts = {
     x: () => {}, hide: () => hideParts([p]), solo: () => isolate([p]), all: () => setPartsVisible(() => true),
+    rel: () => showRelated(h), quick: () => openQuick(h),
     look: () => setView('', true, h.normal), focus: () => fitTo(p.bbox.clone().translate(p.group.position).getBoundingSphere(new THREE.Sphere())),
   };
   pop.querySelectorAll('button[data-a]').forEach(b => b.onclick = () => { acts[b.dataset.a](); close(); });
@@ -3457,3 +3530,216 @@ setInterval(() => { if (model.info) loadNotes(false); }, 3000);
 setInterval(() => { if (model.info) loadVariants(); }, 4000);  // variants Claude exports later appear in the switcher
 setInterval(() => { if (model.info && document.querySelector('#tabs button[data-tab="vers"]').classList.contains('on')) loadVersions(); }, 4000);
 window.__cad = { model, motion, setMotionT, motionHome, selection, measurements, section, strokes, notes: () => notes, pickAt, faceHit, setView, setTool, computeMeasure, entGeom, toggleSelect, addMeasurement, openNote, saveShot, setSectionOn, updateSection, loadGhost, clearGhost, versions: () => versions, setOrtho, camera: () => camera, controls };
+
+// ============================================================= settings (whole app) and token savers
+// Stored by the server in ~/.CAD4Ai-settings.json, so they apply to every model, project and browser.
+let appSettings = {}, appDefaults = {};
+const SETTINGS_UI = [
+  { sec: 'Notes for Claude (what one note costs)' },
+  { k: 'note.parts', label: 'Part names in a note', opts: [['nearby', 'Only near the marked place'], ['all', 'All parts'], ['none', 'None']],
+    x: 'A note lists the assembly’s part names so Claude knows what exists. In a big assembly that is the most expensive line: the panel with ~700 parts costs <em>5–8 thousand tokens</em> per note. “Only near the marked place” keeps the parts around your drawing, selection or markers (max 40) and says how many others exist. Small models (≤ 25 parts) always get all names.' },
+  { k: 'note.params', label: 'Parameters in a note', opts: [['related', 'Only related ones'], ['all', 'All'], ['none', 'None']],
+    x: 'The values of the script parameters. “Only related ones” sends the parameters that drive the marked part or place (found in the script, the same as <em>Show related parameters</em>), at most as many as set below, and says how many more there are.' },
+  { k: 'note.scriptMap', label: 'Script map', bool: true,
+    x: 'Adds the script lines (file:from-to) where the marked parts are built, also in imported modules. Claude reads those few dozen lines instead of the whole script: on the panel (812 lines) that saves roughly <em>8–10 thousand tokens</em> per change.' },
+  { k: 'note.screenshot', label: 'Screenshot in a note', bool: true,
+    x: 'The picture shows Claude what you mean (about <em>1.5 thousand tokens</em>). Turn it off if your notes always have a selection, measurements or markers that say precisely where.' },
+  { k: 'note.modelHint', label: 'Model suggestion', bool: true,
+    x: 'One line in the note with the cheapest Claude model and effort that should do the request on the first try (from the request text, the script size and the part count). A guide only: you switch the model yourself.' },
+  { k: 'note.contextFile', label: 'Project context file', bool: true,
+    x: 'For scripts over 300 lines Claude writes a short <span class="mono">&lt;model&gt;.context.md</span> once (what each function builds, line ranges) and reads it in later notes instead of exploring the script. The first note costs a bit more, the following ones less.' },
+  { sec: 'Related parameters' },
+  { k: 'related.byValue', label: 'Match by dimension', bool: true,
+    x: 'Besides tracing the script, a parameter whose value equals the clicked size (a Ø11 hole → <span class="mono">FL_HOLE_D = 11</span>, also 2× and ½×) counts as related.' },
+  { k: 'related.max', label: 'How many in a note', num: [3, 40],
+    x: 'Upper limit of related parameters sent with a note.' },
+  { sec: 'After a rebuild (Params tab)' },
+  { k: 'checks.afterRebuild', label: 'Checks', opts: [['basic', 'Validity and volume'], ['full', '+ collisions'], ['off', 'Off']],
+    x: 'Runs on this computer, <em>no tokens</em>. “Validity and volume” checks every solid (BRepCheck) and the volume change against the last rebuild (about 5 s for the panel). “+ collisions” also runs the collision analysis of the Analyze tab and colours the touching places.' },
+  { sec: 'Quick change (right-click menu)' },
+  { k: 'quick.screenshot', label: 'Screenshot with a quick change', bool: true,
+    x: 'A quick change sends the clicked face, the related parameters and your sentence. Without the picture it is the cheapest way to ask Claude for a small edit.' },
+];
+async function loadSettings() {
+  try { const r = await api('/api/settings'); appSettings = r.values || {}; appDefaults = r.defaults || {}; } catch { /* older server */ }
+}
+async function saveSetting(k, v) {
+  appSettings[k] = v;
+  try { appSettings = (await api('/api/settings', { values: { [k]: v } })).values; } catch (e) { toast('Saving the setting failed: ' + e.message, true); }
+}
+function renderSettings() {
+  $('setList').innerHTML = SETTINGS_UI.map(o => {
+    if (o.sec) return `<div class="set-sec">${esc(o.sec)}</div>`;
+    const v = appSettings[o.k], id = 'set_' + o.k.replace('.', '_');
+    const ctl = o.bool ? `<input type="checkbox" id="${id}" data-k="${o.k}" ${v ? 'checked' : ''}>`
+      : o.num ? `<input type="number" id="${id}" data-k="${o.k}" min="${o.num[0]}" max="${o.num[1]}" value="${v}" style="width:70px">`
+      : `<select id="${id}" data-k="${o.k}">${o.opts.map(([val, t]) => `<option value="${val}" ${v === val ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+    return `<div class="set"><div class="h"><label for="${id}"><b>${esc(o.label)}</b></label>${ctl}</div><div class="x">${o.x}</div></div>`;
+  }).join('');
+  $('setList').querySelectorAll('[data-k]').forEach(c => c.onchange = () => {
+    const o = SETTINGS_UI.find(x => x.k === c.dataset.k);
+    saveSetting(o.k, o.bool ? c.checked : o.num ? Math.max(o.num[0], Math.min(o.num[1], Math.round(+c.value || 0))) : c.value);
+  });
+}
+$('bSettings').onclick = async () => { await loadSettings(); renderSettings(); $('settings').classList.add('open'); };
+$('setClose').onclick = $('setOk').onclick = () => $('settings').classList.remove('open');
+$('settings').onclick = e => { if (e.target.id === 'settings') $('settings').classList.remove('open'); };
+$('setReset').onclick = async () => {
+  try { appSettings = (await api('/api/settings', { values: appDefaults })).values; renderSettings(); toast('Settings back to defaults.'); } catch (e) { toast(e.message, true); }
+};
+loadSettings();
+
+/** Parts near some points (bounding boxes, exploded positions included): what a note is about. */
+function nearPartNames(points) {
+  const pts = points.filter(p => Array.isArray(p) && p.length === 3).map(p => new THREE.Vector3(...p));
+  if (!pts.length || model.parts.length <= 25) return null;
+  const r = Math.max(model.radius * 0.08, 30);
+  const scored = model.parts.map(p => {
+    const b = p.bbox.clone().translate(p.group.position);
+    return { p, d: Math.min(...pts.map(q => b.distanceToPoint(q))) };
+  }).filter(x => x.d <= r).sort((a, b) => a.d - b.d);
+  return [...new Set(scored.map(x => x.p.name))].slice(0, 40);
+}
+
+/** Sizes of the clicked face that may equal a parameter (Ø, R, length). */
+function faceValues(h) {
+  const fa = model.parts[h.part]?.an.faces[h.faceId];
+  if (!fa || fa.type !== 'cylinder') return [];
+  return [2 * fa.radius, fa.radius, fa.length].map(r2);
+}
+function fetchRelated(h) {
+  return api('/api/related', { parts: [model.parts[h.part].name], values: faceValues(h) });
+}
+async function showRelated(h) {
+  const p = model.parts[h.part];
+  try {
+    const r = await fetchRelated(h);
+    if (r.error && !r.params.length) return toast('Related parameters: ' + r.error, true);
+    const known = new Set(params.map(x => x.name));
+    const list = r.params.filter(x => known.has(x.name) && x.score >= 0.15).slice(0, 30);
+    if (!list.length) return toast(`No parameter found that drives ${p.name}.`);
+    relState = { label: p.name, list };
+    paramGrpClosed.delete(REL_G);
+    $('paramSearch').value = '';
+    paramFilter = 'all';
+    openTab('params'); renderParams();
+    $('paramList').scrollIntoView({ block: 'start' });
+  } catch (e) { toast('Related parameters failed: ' + e.message, true); }
+}
+
+// ---- quick change: one face, related parameters, one sentence; few tokens
+let quickCtx = null;
+async function openQuick(h) {
+  const p = model.parts[h.part], fa = p.an.faces[h.faceId];
+  quickCtx = { h, part: p.name, desc: fa ? describeFace(fa) : '', rel: [] };
+  $('qWhere').textContent = `${p.name}${fa ? ` · face #${h.faceId}: ${quickCtx.desc}` : ''}`;
+  $('qChips').innerHTML = '<span class="muted">Looking for related parameters…</span>';
+  $('qText').value = '';
+  $('qInfo').textContent = appSettings['quick.screenshot'] ? 'A screenshot is sent too (Settings).' : 'No screenshot: the face, the point and the parameters say where (cheapest).';
+  $('quick').classList.add('open'); $('qText').focus();
+  try {
+    const r = await fetchRelated(h);
+    const known = new Map(params.map(x => [x.name, x]));
+    quickCtx.rel = r.params.filter(x => known.has(x.name)).slice(0, 8);
+    $('qChips').innerHTML = quickCtx.rel.length
+      ? quickCtx.rel.map(x => `<button class="ghost" data-n="${x.name}" title="${esc(x.why)} · click to add it to the request">${esc(x.name)} = ${esc(String(known.get(x.name).value))}</button>`).join('')
+      : '<span class="muted">No related parameter found.</span>';
+    $('qChips').querySelectorAll('[data-n]').forEach(b => b.onclick = () => {
+      const t = $('qText'); t.value = (t.value ? t.value.replace(/\s*$/, ' ') : '') + b.dataset.n + ' '; t.focus();
+    });
+  } catch { $('qChips').innerHTML = ''; }
+}
+function closeQuick() { $('quick').classList.remove('open'); quickCtx = null; }
+$('qCancel').onclick = closeQuick;
+$('quick').onclick = e => { if (e.target.id === 'quick') closeQuick(); };
+$('qText').onkeydown = e => {
+  e.stopPropagation();
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('qSend').click(); } else if (e.key === 'Escape') closeQuick();
+};
+$('qSend').onclick = async () => {
+  const comment = $('qText').value.trim();
+  if (!comment) { $('qText').focus(); return toast('Write what should change.', true); }
+  const { h, part, desc } = quickCtx;
+  const point = h.local.map(r2);
+  const payload = {
+    kind: 'quick', model: model.info.path, name: model.info.name, step: model.info.step || null, comment,
+    features: [{ index: 1, type: 'face', part, title: `Face #${h.faceId} of ${part}`, description: desc, point }],
+    strokes: [], measurements: [], markers: [], paint: [], anchor: point, anchorPart: part,
+    parts: model.parts.map(p => p.name), nearParts: nearPartNames([h.world.toArray()]) || [part], source: model.source,
+    image: appSettings['quick.screenshot'] ? composeShot().toDataURL('image/png') : '',
+  };
+  $('qSend').disabled = true;
+  try { await api('/api/annotate', payload); closeQuick(); toast('Sent to Claude ✔'); loadNotes(true); }
+  catch (e) { toast('Sending failed: ' + e.message, true); }
+  finally { $('qSend').disabled = false; }
+};
+
+// ---- checks after a parameter rebuild (on this computer, no tokens)
+let lastCheck = null;
+async function afterRebuildChecks() {
+  const mode = appSettings['checks.afterRebuild'] || 'basic';
+  const el = $('paramCheck');
+  if (mode === 'off') { el.textContent = ''; return; }
+  el.style.color = ''; el.textContent = 'Checking the model…';
+  const out = [];
+  try {
+    const r = await api('/api/check');
+    if (!r.ok) out.push(`✗ check failed: ${r.error || '?'}`);
+    else {
+      out.push(r.invalid.length ? `✗ invalid B-rep: ${r.invalid.slice(0, 6).join(', ')}${r.invalid.length > 6 ? '…' : ''}` : `✓ all ${r.parts} solids valid`);
+      if (lastCheck && lastCheck.path === model.info.path) {
+        const dv = r.volume - lastCheck.volume;
+        const changed = Object.keys(r.vols).filter(k => Math.abs((lastCheck.vols[k] ?? 0) - r.vols[k]) > Math.max(1, r.vols[k] * 1e-4));
+        out.push(`volume ${fmtn(r.volume / 1000, 1)} cm³ (${dv >= 0 ? '+' : ''}${fmtn(dv / 1000, 2)})${changed.length ? ` · changed: ${changed.slice(0, 5).join(', ')}${changed.length > 5 ? ` +${changed.length - 5}` : ''}` : ''}`);
+      } else out.push(`volume ${fmtn(r.volume / 1000, 1)} cm³`);
+      lastCheck = { path: model.info.path, volume: r.volume, vols: r.vols };
+      out.push(`${r.seconds} s`);
+    }
+    if (mode === 'full' && model.parts.length > 1) {
+      runCollisions();
+      const n = anaState.colliding?.length ?? 0;
+      out.push(n ? `✗ ${n} colliding pair${n > 1 ? 's' : ''} (Analyze tab)` : '✓ no collisions');
+    }
+    el.textContent = out.join(' · ');
+    el.style.color = el.textContent.includes('✗') ? 'var(--bad)' : '';
+  } catch (e) { el.textContent = 'Check failed: ' + e.message; }
+}
+
+// ---- variants from one parameter (no Claude)
+function renderSweep() {
+  const nums = params.filter(p => p.type !== 'bool');
+  $('sweepBox').style.display = nums.length ? '' : 'none';
+  const cur = $('swName').value;
+  $('swName').innerHTML = nums.map(p => `<option value="${p.name}">${esc(p.name)} = ${p.value}${p.unit ? ' ' + esc(p.unit) : ''}</option>`).join('');
+  if (nums.some(p => p.name === cur)) $('swName').value = cur;
+  swFill();
+}
+function swFill() {
+  const p = params.find(x => x.name === $('swName').value);
+  if (!p) return;
+  const st = p.type === 'int' ? 1 : paramStep(p) * 10;
+  $('swFrom').value = r2(p.value - 2 * st); $('swTo').value = r2(p.value + 2 * st); $('swStep').value = r2(st);
+  swCount();
+}
+function swValues() {
+  const a = +$('swFrom').value, b = +$('swTo').value, st = Math.abs(+$('swStep').value);
+  if (!isFinite(a) || !isFinite(b) || !st) return [];
+  const out = [];
+  for (let v = Math.min(a, b); v <= Math.max(a, b) + 1e-9 && out.length < 13; v += st) out.push(r2(v));
+  return out;
+}
+function swCount() { const n = swValues().length; $('swInfo').textContent = n > 12 ? 'too many values (max 12)' : `${n} variant${n === 1 ? '' : 's'}`; $('swRun').disabled = !n || n > 12; }
+$('swName').onchange = swFill;
+for (const id of ['swFrom', 'swTo', 'swStep']) $(id).oninput = swCount;
+$('swRun').onclick = async () => {
+  const vals = swValues(), name = $('swName').value;
+  if (!confirm(`Rebuild the model ${vals.length}× (${name} = ${vals.join(', ')}) and save each as a variant next to the model?`)) return;
+  $('swRun').disabled = true; $('swInfo').textContent = 'Rebuilding…';
+  try {
+    const r = await api('/api/sweep', { name, values: vals });
+    $('swInfo').textContent = `${r.made.length} variant${r.made.length === 1 ? '' : 's'} saved${r.errors.length ? `, ${r.errors.length} failed` : ''}`;
+    if (r.errors.length) toast('Some values failed: ' + r.errors.join(' | '), true);
+    loadVariants();
+  } catch (e) { $('swInfo').textContent = 'Failed: ' + e.message; }
+  finally { $('swRun').disabled = false; }
+};

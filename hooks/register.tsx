@@ -516,6 +516,7 @@ type Annotation = {
   name: string
   step?: string | null
   comment: string
+  hints?: string[]
   strokes?: Stroke[]
   features?: Feature[]
   measurements?: Measure[]
@@ -623,6 +624,9 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
     lines.push(`Screenshot: ${a.screenshot} (Read it first: the letters are markers, the numbers in orange circles selected features, the blue labels dimensions; they match the lists below)`)
   if (a.script) lines.push(`Script: ${a.script} (the parametric source: make the change here)`)
   if (a.params?.length) lines.push(`Parameters: ${a.params.join(', ')}`)
+  // set by the viewer's settings: script map, why lists are short, a model suggestion
+  for (const h of a.hints ?? []) lines.push(h)
+  if (a.kind === 'quick') lines.push('Quick change: do only this, without other improvements; no screenshot was sent, the lists below say where.')
   if (dataPath) lines.push(`Annotation data: ${dataPath} (skill cad-annotate, script locate.py)`)
   if (a.id) lines.push(`Note ID: ${a.id} (mark it done when handled, see skill cad-annotate)`)
   if (a.camera?.viewDir) lines.push(`Camera view direction: ${vec(a.camera.viewDir)}`)
