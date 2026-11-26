@@ -25,6 +25,9 @@ API:
   POST /api/variants/choose {path}  marks the chosen variant, adds a message for Claude
   GET  /api/export/formats          formats the Export menu offers
   POST /api/export {format, quality} converts the model, asks where to save (native dialog)
+  POST /api/project/save {state, dest?} saves model, script, exports, history, notes and a viewer copy into one folder
+  GET  /api/project-state           viewer-state.json of a saved project (dimensions, views, paint, markers)
+  GET  /vendor/...                  viewer libraries saved with a project (offline)
   GET  /canvas                      AI construction canvas (canvas.html, canvas.js, geo.js); API /api/canvas* is in canvas.py
   GET  /sketch                      infinite-canvas sketch pad (sketch.html, sketch.js, ink.js)
   GET  /api/sketch?since=&wait=     items and snaps changed since rev since (wait: long-poll up to 25 s)
@@ -61,6 +64,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import canvas as CV
+import project as PROJ
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 IDLE_LIMIT = 8 * 3600
@@ -874,6 +878,17 @@ class Handler(BaseHTTPRequestHandler):
                 name = STATIC[url.path]
                 ctype = "text/html; charset=utf-8" if name.endswith(".html") else "text/javascript; charset=utf-8"
                 return self._file(os.path.join(HERE, name), ctype)
+            if url.path.startswith("/vendor/"):  # the CDN libraries, copied next to a saved project's viewer
+                rel = os.path.normpath(url.path[len("/vendor/"):])
+                full = os.path.join(HERE, "vendor", rel)
+                if rel.startswith("..") or os.path.isabs(rel) or not os.path.isfile(full):
+                    return self._send(404, {"error": "not found"})
+                ctype = "application/wasm" if full.endswith(".wasm") else "text/javascript; charset=utf-8"
+                return self._file(full, ctype)
+            if url.path == "/api/project-state":  # viewer-state.json of a saved project, next to its model folder
+                cur = current()
+                st = os.path.join(os.path.dirname(os.path.dirname(cur["path"])), "viewer-state.json") if cur else ""
+                return self._send(200, read_json(st, {}) if st and os.path.isfile(st) else {})
             if url.path.startswith("/api/canvas"):
                 res = CV.route("GET", url.path, q, None, STATE["data"])
                 if res:
@@ -1033,6 +1048,33 @@ class Handler(BaseHTTPRequestHandler):
                 except (ValueError, IndexError):
                     res = {"ok": False, "error": (r.stderr or r.stdout or "export failed")[-500:]}
                 return self._send(200 if res.get("ok") or res.get("cancelled") else 500, res)
+
+            if url.path == "/api/project/save":
+                if self.client_address[0] not in ("127.0.0.1", "::1"):  # writes folders: only from this PC, not a tablet
+                    return self._send(403, {"error": "save the project from this computer"})
+                cur = current()
+                if not cur:
+                    return self._send(400, {"error": "no model"})
+                if not EXPORT_LOCK.acquire(blocking=False):
+                    return self._send(409, {"error": "an export or save is already running (is a dialog open?)"})
+                try:
+                    dest = body.get("dest")
+                    if not dest:
+                        r = subprocess.run([sys.executable, os.path.join(HERE, "project.py"), "--ask"], capture_output=True,
+                                           text=True, timeout=900, creationflags=0x08000000 if os.name == "nt" else 0)
+                        dest = (r.stdout or "").strip().splitlines()[-1] if (r.stdout or "").strip() else ""
+                    if not dest:
+                        return self._send(200, {"cancelled": True})
+                    if not os.path.isdir(dest):
+                        return self._send(400, {"error": f"folder does not exist: {dest}"})
+                    log = []
+                    state = body.get("state") if isinstance(body.get("state"), dict) else {}
+                    root = PROJ.save(cur, dest, history_dir(cur["path"]), annotations_for(cur["path"]), state, log)
+                    return self._send(200, {"ok": True, "path": root, "log": log})
+                except Exception as e:  # noqa: BLE001
+                    return self._send(500, {"ok": False, "error": str(e)[:500]})
+                finally:
+                    EXPORT_LOCK.release()
 
             if url.path == "/api/data":
                 STATE["data"] = body.get("data") or STATE["data"]
@@ -1256,8 +1298,12 @@ def main():
     ap.add_argument("--port", type=int, default=8766)
     ap.add_argument("--data", required=True)
     ap.add_argument("--detach", action="store_true")
+    ap.add_argument("--open", help="show this .step/.stl right away (a saved project's Open model.bat)")
     a = ap.parse_args()
     os.makedirs(a.data, exist_ok=True)
+    if a.open and os.path.isfile(a.open):
+        STATE["data"] = a.data
+        open_model(os.path.abspath(a.open))
 
     if a.detach:
         if hand_over(a.port, a.data):

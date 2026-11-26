@@ -281,6 +281,7 @@ function disposeModel() {
 
 async function loadModel(info, keepCamera) {
   $('loading').classList.add('on');
+  await seedProjectState(info);
   let srcs, source;
   try {
     if (info.step && info.stepMtimeMs >= info.mtimeMs - 120000) {
@@ -2683,12 +2684,42 @@ function composeShot() {
   });
   return c;
 }
+// ---- save project: model, script, exports, history, notes and a viewer copy into one folder (project.py)
+// What only this browser keeps (dimensions, saved views, paint, markers) goes along in viewer-state.json and is
+// loaded back the first time the saved project is opened.
+const STATE_KEYS = ['meas', 'views', 'paint', 'markers'];
+async function saveProject() {
+  if (!model.info) return toast('No model is loaded.', true);
+  const storage = {};
+  for (const k of STATE_KEYS) { try { const v = localStorage.getItem(`cadp.${k}:${model.info.path}`); if (v) storage[k] = JSON.parse(v); } catch { /* skip */ } }
+  const state = { storage, camera: { position: arr(camera.position), target: arr(controls.target), up: arr(camera.up), ortho: camera === ortho } };
+  $('bProject').disabled = true;
+  toast('Choose a folder for the project (the dialog may open behind this window)…');
+  try {
+    const r = await api('/api/project/save', { state });
+    if (r.cancelled) toast('Saving the project was cancelled.');
+    else toast(`Project saved: ${r.path} · ${(r.log || []).join(' · ')}`);
+  } catch (e) { toast('Saving the project failed: ' + e.message, true); }
+  finally { $('bProject').disabled = false; }
+}
+async function seedProjectState(info) {
+  const flag = 'cadp.seeded:' + info.path;
+  try { if (localStorage.getItem(flag)) return; } catch { return; }
+  let st = {};
+  try { st = await api('/api/project-state'); } catch { return; }
+  for (const k of STATE_KEYS) {
+    const key = `cadp.${k}:${info.path}`, v = st.storage?.[k];
+    try { if (v && !localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(v)); } catch { /* per-viewer convenience */ }
+  }
+  try { localStorage.setItem(flag, '1'); } catch { /* ignore */ }
+}
 async function saveShot() {
   const c = composeShot();
   const r = await api('/api/screenshot', { image: c.toDataURL('image/png') });
   toast('Screenshot saved: ' + r.path.split(/[\\/]/).pop());
   return r.path;
 }
+$('bProject').onclick = saveProject;
 $('bShot').onclick = () => saveShot().catch(e => toast('Could not save the screenshot: ' + e.message, true));
 $('bFit').onclick = () => setView('', true, camera.position.clone().sub(controls.target).normalize().toArray());
 const DISP = [['dEdges', 'edges'], ['dWire', 'wire'], ['dGrid', 'grid'], ['dAxes', 'axes'], ['dShadow', 'shadow'], ['dAO', 'ao'], ['dCube', 'cube'], ['dTriad', 'triad']];
