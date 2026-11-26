@@ -1,4 +1,4 @@
-"""Disassembly analysis for <model>.explode.json (cad-preview exploded view).
+"""Disassembly analysis for <model>.explode.json (CAD4Ai exploded view).
 
   explode.py info <model.step>
       parts (names as the viewer shows them) with bounding boxes, volumes and cylinder axes

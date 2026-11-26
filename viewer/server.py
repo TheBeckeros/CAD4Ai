@@ -1,4 +1,4 @@
-"""Local server for the interactive 3D viewer (cad-preview mod).
+"""Local server for the interactive 3D viewer (CAD4Ai mod).
 
 Static files:  /  /app.js  /geom.js  /analysis.js
 API:
@@ -35,7 +35,7 @@ API:
   POST /api/sketch/send {image, text}  the whole canvas as a brief for Claude via <data>/inbox
 
 Run:  python server.py --port 8766 --data <folder> [--detach]
-Listens on 127.0.0.1 only (set CAD_PREVIEW_LAN=1 or create ~/.cad-preview-lan to listen on the network; other machines then
+Listens on 127.0.0.1 only (set CAD4AI_LAN=1 or create ~/.CAD4Ai-lan to listen on the network; other machines then
 need the token in <data>/lan-token, GET /api/lan gives the full addresses for a tablet).
 """
 import argparse
@@ -140,9 +140,9 @@ def open_model(path):
 def library():
     """Models (.step/.stp/.stl, variants grouped) and canvas files (.platno.json) next to the data dir: newest first."""
     root = os.path.abspath(STATE["data"] or ".")
-    while os.path.dirname(root) != root and not os.path.basename(root).startswith(".cad-preview"):
-        root = os.path.dirname(root)  # data dir is <project>/.cad-preview[/<session>]
-    root = os.path.dirname(root) if os.path.basename(root).startswith(".cad-preview") else os.path.dirname(os.path.abspath(STATE["data"] or "."))
+    while os.path.dirname(root) != root and not os.path.basename(root).startswith(".CAD4Ai"):
+        root = os.path.dirname(root)  # data dir is <project>/.CAD4Ai[/<session>]
+    root = os.path.dirname(root) if os.path.basename(root).startswith(".CAD4Ai") else os.path.dirname(os.path.abspath(STATE["data"] or "."))
     skip = {"node_modules", "__pycache__", "venv", "graphify-out"}
     models, canvases = {}, []
     for dp, dns, fns in os.walk(root):
@@ -751,7 +751,7 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(n).decode("utf-8") or "{}")
 
     def _lan_denied(self, url):
-        """Other machines (CAD_PREVIEW_LAN=1) need the token from <data>/lan-token, sent once as ?t= and kept in a cookie."""
+        """Other machines (CAD4AI_LAN=1) need the token from <data>/lan-token, sent once as ?t= and kept in a cookie."""
         if self.client_address[0] in ("127.0.0.1", "::1"):
             return False
         tok = lan_token()
@@ -1084,12 +1084,12 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
 
-LAN_FLAG = os.path.join(os.path.expanduser("~"), ".cad-preview-lan")
+LAN_FLAG = os.path.join(os.path.expanduser("~"), ".CAD4Ai-lan")
 
 
 def lan_on():
     """Network mode: the env var, or the flag file so servers the plugin starts (no env) get it too."""
-    return bool(os.environ.get("CAD_PREVIEW_LAN")) or os.path.isfile(LAN_FLAG)
+    return bool(os.environ.get("CAD4AI_LAN")) or os.path.isfile(LAN_FLAG)
 
 
 def lan_ips():
@@ -1112,7 +1112,7 @@ def lan_ips():
 def lan_info(port):
     """Full addresses another device on the same network can open (token included); lan false when not in network mode."""
     if not lan_on() or not STATE["data"]:
-        return {"lan": False, "hint": f"create {LAN_FLAG} (or set CAD_PREVIEW_LAN=1) and restart the server"}
+        return {"lan": False, "hint": f"create {LAN_FLAG} (or set CAD4AI_LAN=1) and restart the server"}
     t = lan_token()
     return {"lan": True, "token": t, "urls": [{"ip": ip, "viewer": f"http://{ip}:{port}/?t={t}", "canvas": f"http://{ip}:{port}/canvas?t={t}",
                                                "sketch": f"http://{ip}:{port}/sketch?t={t}"} for ip in lan_ips()]}

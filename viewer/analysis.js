@@ -1,4 +1,4 @@
-// cad-preview: model checks that run only in the browser (wall thickness, draft, overhang,
+// CAD4Ai: model checks that run only in the browser (wall thickness, draft, overhang,
 // collisions, mass properties). Nothing here is sent to Claude.
 import * as THREE from 'three';
 import { eigenSym3 } from './geom.js';

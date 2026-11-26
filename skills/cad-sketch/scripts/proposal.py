@@ -1,4 +1,4 @@
-"""Send a snap proposal to the cad-preview sketch pad.
+"""Send a snap proposal to the CAD4Ai sketch pad.
 
 python proposal.py <snap-id> <items.json | -> [--space world|rect|image] [--note "one line for the user"] [--port 8766]
 

@@ -1,4 +1,4 @@
-"""Export the current model to another 3D format (cad-preview Export menu).
+"""Export the current model to another 3D format (CAD4Ai Export menu).
 
 Run:  python export.py <source .step|.stl> <format> [--quality coarse|normal|fine] [--out <path>]
 Without --out a native "Save as" dialog asks where to save. Prints one JSON line:
@@ -51,7 +51,7 @@ def ask_path(src, fmt):
 
 
 def write_obj(shape, path, tol, ang):
-    lines, base = [f"# exported by cad-preview from {os.path.basename(path)}"], 1
+    lines, base = [f"# exported by CAD4Ai from {os.path.basename(path)}"], 1
     for i, solid in enumerate(shape.Solids() or [shape], 1):
         verts, tris = solid.tessellate(tol, ang)
         lines.append(f"o part_{i}")

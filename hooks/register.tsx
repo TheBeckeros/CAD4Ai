@@ -4,16 +4,16 @@ import type { Register } from 'claude-code'
 import type { Model, View } from '../types'
 
 // ---------------------------------------------------------------------------
-// cad-preview: when Claude writes a .step (or .stl), the interactive 3D viewer shows it.
+// CAD4Ai: when Claude writes a .step (or .stl), the interactive 3D viewer shows it.
 // The fallback pane renders an SVG (orthographic projection, painter's algorithm,
 // highlighted sharp edges). Large meshes are simplified by vertex clustering.
 // ---------------------------------------------------------------------------
 
-const PANE = 'cad-preview'
+const PANE = 'CAD4Ai'
 const ISO: View = { yaw: -35, pitch: 28, zoom: 1 }
 
-const model = atom({ plugin: 'cad-preview', key: 'model' } as const, null, { shape: 'model-1' })
-const view = atom({ plugin: 'cad-preview', key: 'view' } as const, ISO, { shape: 'view-1' })
+const model = atom({ plugin: 'CAD4Ai', key: 'model' } as const, null, { shape: 'model-1' })
+const view = atom({ plugin: 'CAD4Ai', key: 'view' } as const, ISO, { shape: 'view-1' })
 
 const WATCHED = /^(Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit)$/
 const SKIP_DIRS = /^(\.|node_modules$|__pycache__$|venv$|\.venv$)/
@@ -387,13 +387,13 @@ const note = ($: any, step: string, err: unknown): void => {
   void Promise.resolve()
     .then(() => $.store.set('lastProblems', [...problems]))
     .catch(() => undefined)
-  $.ui.status(`cad-preview: ${msg}`)
+  $.ui.status(`CAD4Ai: ${msg}`)
 }
 
 async function getDataDir($: any): Promise<string> {
   if (dataDir === undefined) {
     const cwd: string = await $.session.cwd()
-    const dir = joinPath(joinPath(cwd, '.cad-preview'), `s-${Math.random().toString(36).slice(2, 8)}`)
+    const dir = joinPath(joinPath(cwd, '.CAD4Ai'), `s-${Math.random().toString(36).slice(2, 8)}`)
     for (let i = 0; i < 30; i++) {
       const port = 8767 + Math.floor(Math.random() * 2000)
       if (!(await $.http.fetch(`http://127.0.0.1:${port}/api/ping`).catch(() => undefined))?.ok) {
@@ -453,10 +453,10 @@ async function ensureServer($: any): Promise<void> {
 }
 
 // Plugins cannot control the Browser pane; Claude opens it.
-// The mod tells Claude via a system prompt section and the /cad-preview reply.
+// The mod tells Claude via a system prompt section and the /CAD4Ai reply.
 const openHint = (): string =>
-  `cad-preview 3D viewer: ${VIEWER_URL}. CAD models: export STEP only (no STL or other format unless the task asks for it); ` +
-  `the viewer shows the .step directly. The user opens the viewer with /cad-preview; do not open it, call it or ` +
+  `CAD4Ai 3D viewer: ${VIEWER_URL}. CAD models: export STEP only (no STL or other format unless the task asks for it); ` +
+  `the viewer shows the .step directly. The user opens the viewer with /CAD4Ai; do not open it, call it or ` +
   `screenshot it yourself unless asked: every export reloads it by itself. Design variants of one part: export each as ` +
   `<name>@<label>.step in one folder (e.g. bracket@A-light.step, bracket@B-ribbed.step); the viewer shows a switcher and the user ` +
   `picks one. Exporting to other formats is in the viewer's Export menu. To show an existing model: ` +
@@ -538,12 +538,12 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
   if (a.kind === 'explode')
     return [`Plan the exploded view, disassembly and assembly sequence of the assembly ${a.model} (skill cad-explode).`, a.comment && a.comment !== 'explode' ? `Focus: ${a.comment}` : '', a.id ? `Note ID: ${a.id}` : ''].filter(Boolean).join('\n')
   if (a.kind === 'newmodel')
-    return [`Create a new CAD model "${a.model}" and export it as STEP (the cad-preview viewer shows it).`, `Description: ${a.comment || '(none, ask me what I need)'}`, a.id ? `Note ID: ${a.id}` : ''].filter(Boolean).join('\n')
+    return [`Create a new CAD model "${a.model}" and export it as STEP (the CAD4Ai viewer shows it).`, `Description: ${a.comment || '(none, ask me what I need)'}`, a.id ? `Note ID: ${a.id}` : ''].filter(Boolean).join('\n')
   if (a.kind === 'variant')
     return [`I choose design variant "${a.comment}" (${a.model}) out of ${(a.variants ?? []).join(', ')}. Continue with this one as the final design.`, a.id ? `Note ID: ${a.id}` : ''].filter(Boolean).join('\n')
   if (a.kind === 'sketch')
     return [
-      'Design brief from the cad-preview sketch pad (skill cad-sketch):',
+      'Design brief from the CAD4Ai sketch pad (skill cad-sketch):',
       a.comment || '(no text, look at the canvas)',
       `Canvas image: ${a.screenshot} (view it with the Read tool)`,
       `On the canvas: ${a.summary || '(empty)'}`,
@@ -553,7 +553,7 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
     ].filter(Boolean).join('\n')
   if (a.kind === 'snap')
     return [
-      'Snap request from the cad-preview sketch pad (skill cad-sketch): redraw only the boxed region.',
+      'Snap request from the CAD4Ai sketch pad (skill cad-sketch): redraw only the boxed region.',
       `Instruction: ${a.comment}`,
       `Region image: ${a.screenshot} (view it with the Read tool; ${a.scale} px per canvas unit, top-left = region corner)`,
       `Region [x, y, w, h]: ${vec(a.rect ?? [])}`,
@@ -562,7 +562,7 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
     ].join('\n')
   if (a.kind === 'canvas')
     return [
-      'Request from the cad-preview construction canvas (skill cad-canvas):',
+      'Request from the CAD4Ai construction canvas (skill cad-canvas):',
       `Instruction: ${a.comment || '(none, work out from the drawing what is wanted)'}`,
       `Region image: ${a.screenshot} (view it with the Read tool; ${a.scale} px per canvas unit, top-left = region corner)`,
       `Region [x, y, w, h]: ${vec(a.rect ?? [])}`,
@@ -571,7 +571,7 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
     ].join('\n')
   if (a.kind === 'canvas-answers')
     return [
-      `Answers to your briefing questions on the cad-preview construction canvas (skill cad-canvas), request ${a.req}:`,
+      `Answers to your briefing questions on the CAD4Ai construction canvas (skill cad-canvas), request ${a.req}:`,
       a.summary,
       a.comment ? `Note from the user: ${a.comment}` : '',
       'Update your understanding; ask again with canvas.py briefing only if something essential is still open, otherwise send the result with canvas.py preview.',
@@ -581,7 +581,7 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
     const out = [
       `Several places marked on the model, one note each (${ms.length} markers).`,
       '',
-      `— 3D annotation from cad-preview, model ${a.name}`,
+      `— 3D annotation from CAD4Ai, model ${a.name}`,
       `Model: ${a.model}`,
     ]
     if (dataPath) out.push(`Annotation data: ${dataPath} (skill cad-annotate, kind batch: run locate.py --points per marker)`)
@@ -597,7 +597,7 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
     }
     return out.join('\n')
   }
-  const lines = [a.comment, '', `— 3D annotation from cad-preview, model ${a.name}`, `Model: ${a.model}`]
+  const lines = [a.comment, '', `— 3D annotation from CAD4Ai, model ${a.name}`, `Model: ${a.model}`]
   if (dataPath) lines.push(`Annotation data: ${dataPath} (skill cad-annotate, script locate.py)`)
   if (a.id) lines.push(`Note ID: ${a.id} (mark it done when handled, see skill cad-annotate)`)
   // the pen draws over the screen, so the image is the record of a drawing; features alone are exact
@@ -668,7 +668,7 @@ async function checkInbox($: any): Promise<void> {
       }
       // Never sent automatically: appended to the draft, the user decides when to send.
       const box = await $.prompt.read()
-      const count = (box.text.match(/^— 3D annotation from cad-preview/gm) ?? []).length
+      const count = (box.text.match(/^— 3D annotation from CAD4Ai/gm) ?? []).length
       const head = `Note ${count + 1}: `
       const sep = box.text.trim() === '' ? '' : '\n\n'
       let filled = await $.prompt.fill({ text: sep + head + body, mode: 'append' })
@@ -706,7 +706,7 @@ async function checkInbox($: any): Promise<void> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
-      name: 'cad-preview',
+      name: 'CAD4Ai',
       description: 'Opens the 3D viewer for the newest STEP/STL model (or the given path)',
       argumentHint: '[path.step]',
     })
@@ -726,7 +726,7 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'cad-preview' }, async ($, e) => {
+  on('command.run', { command: 'CAD4Ai' }, async ($, e) => {
     const arg = e.args.trim().replace(/^["']|["']$/g, '')
     let found: Found | undefined
     if (arg) {
@@ -741,14 +741,14 @@ export const register: Register = on => {
     else await claimViewer($).catch(err => note($, 'server', err))
     return {
       text: found ? `3D viewer for ${baseName(found.path)} is ready at ${VIEWER_URL}.` : `3D viewer is ready at ${VIEWER_URL}; models appear as they are exported.`,
-      context: `The user ran /cad-preview: open the viewer in the browser pane now with mcp__Claude_Browser__preview_start, url "${VIEWER_URL}". Say nothing else about it.`,
+      context: `The user ran /CAD4Ai: open the viewer in the browser pane now with mcp__Claude_Browser__preview_start, url "${VIEWER_URL}". Say nothing else about it.`,
     }
   })
 
   on('prompt.compose', async ($, e, next) => {
     await getDataDir($)
     const res = await next(e)
-    return { sections: [...res.sections, { id: 'cad-preview:viewer', text: openHint(), scope: 'session' as const }] }
+    return { sections: [...res.sections, { id: 'CAD4Ai:viewer', text: openHint(), scope: 'session' as const }] }
   })
 
   on('tool.call', async ($, e, next) => {

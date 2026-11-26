@@ -1,9 +1,9 @@
 ---
 name: cad-annotate
-description: Use when a message contains "3D annotation from cad-preview" or the user refers to a place they marked on a 3D model.
+description: Use when a message contains "3D annotation from CAD4Ai" or the user refers to a place they marked on a 3D model.
 ---
 
-# Reading 3D notes from the cad-preview viewer
+# Reading 3D notes from the CAD4Ai viewer
 
 The user works in the interactive viewer in the browser pane. They orbit the model, select
 faces, edges and vertices, measure, cut sections, compare versions and draw with a pen.
@@ -81,4 +81,4 @@ and say it. If you do not handle a note (unclear, waiting for an answer), leave 
 - No `Annotation data` (older note): pass the points from the message with `--points "x,y,z;x,y,z;..."`.
 - No STEP: `locate.py` needs a STEP file. Export the model first, or work from the points and
   the feature description.
-- The viewer can be opened manually with `/cad-preview [path.step]`. The server runs on `<viewer URL>`.
+- The viewer can be opened manually with `/CAD4Ai [path.step]`. The server runs on `<viewer URL>`.

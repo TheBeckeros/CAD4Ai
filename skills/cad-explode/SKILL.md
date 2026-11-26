@@ -1,9 +1,9 @@
 ---
 name: cad-explode
-description: Use only when the user asks for an exploded view, disassembly / assembly sequence or assembly instructions, serviceability or "can it be taken apart" analysis of a CAD assembly in the cad-preview viewer (including the "Plan disassembly" request from the viewer's Parts tab). Writes <model>.explode.json next to the model.
+description: Use only when the user asks for an exploded view, disassembly / assembly sequence or assembly instructions, serviceability or "can it be taken apart" analysis of a CAD assembly in the CAD4Ai viewer (including the "Plan disassembly" request from the viewer's Parts tab). Writes <model>.explode.json next to the model.
 ---
 
-# Exploded view and disassembly for the cad-preview viewer
+# Exploded view and disassembly for the CAD4Ai viewer
 
 Only on request: never write an explode file unasked. `<model>.explode.json` next to
 `<model>.step` gives the viewer's **Parts → Exploded view → Disassembly** a step list, Play,

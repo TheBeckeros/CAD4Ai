@@ -532,7 +532,7 @@ def get_object(data, oid):
 
 
 # ---------------------------------------------------------------- canvas files (share a canvas with someone else)
-FILE_FORMAT = "cad-preview-canvas"
+FILE_FORMAT = "CAD4Ai-canvas"
 
 
 def _dialog(save, title, initial=""):
@@ -573,8 +573,9 @@ def file_open(data, body):
             doc = json.load(f)
     except (OSError, ValueError) as e:
         raise ValueError(f"cannot read {os.path.basename(path)}: {e}") from None
-    if not isinstance(doc, dict) or doc.get("format") != FILE_FORMAT or not isinstance(doc.get("objs"), list):
-        raise ValueError(f"{os.path.basename(path)} is not a cad-preview canvas file")
+    formats = (FILE_FORMAT, "cad-preview-canvas")  # old name: files saved before the rename
+    if not isinstance(doc, dict) or doc.get("format") not in formats or not isinstance(doc.get("objs"), list):
+        raise ValueError(f"{os.path.basename(path)} is not a CAD4Ai canvas file")
     objs = [o for o in doc["objs"] if isinstance(o, dict)]
     name = os.path.basename(path)
     snapshot(data, f"před otevřením {name}", auto=True)

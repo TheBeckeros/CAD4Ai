@@ -4,9 +4,9 @@ const CUBE = 'U1RMIEV4cG9ydGVkIGJ5IE9wZW4gQ0FTQ0FERSBUZWNobm9sb2d5IFtkZXYub3Blbm
 const SIZE = 2284
 
 const PANE = {
-  plugin: 'cad-preview',
+  plugin: 'CAD4Ai',
   component: 'Pane',
-  requestId: 'cad-preview',
+  requestId: 'CAD4Ai',
   props: {
     title: '3D',
     isFocused: false,
@@ -21,7 +21,7 @@ test('a new STL updates the viewer model and never opens the old pane', async ($
   let written = false
   let opened = 0
   const writes: { path: string; text: string }[] = []
-  on('command.register', () => ({ value: { command: 'cad-preview' } }))
+  on('command.register', () => ({ value: { command: 'CAD4Ai' } }))
   on('ui.open', () => {
     opened += 1
     return { value: { isPlaced: true } }
@@ -56,7 +56,7 @@ test('a new STL updates the viewer model and never opens the old pane', async ($
   expect(JSON.parse(latest!.text).name).toBe('cube.stl')
 
   const composed = await $.prompt.compose({ model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['desktop'], tools: [], outputStyle: null, traits: [] })
-  expect(composed.sections.some(sec => sec.id === 'cad-preview:viewer' && sec.text.includes('/cad-preview'))).toBe(true)
+  expect(composed.sections.some(sec => sec.id === 'CAD4Ai:viewer' && sec.text.includes('/CAD4Ai'))).toBe(true)
 })
 
 test('a confirmed annotation is appended to the draft, never sent', async ($, on) => {
@@ -65,7 +65,7 @@ test('a confirmed annotation is appended to the draft, never sent', async ($, on
   let submits = 0
   let draft = 'my text'
   const store = new Map<string, unknown>()
-  on('command.register', () => ({ value: { command: 'cad-preview' } }))
+  on('command.register', () => ({ value: { command: 'CAD4Ai' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: '/w' }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'started', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
@@ -126,7 +126,7 @@ test('a broken inbox file is skipped, the batch after it is appended exactly onc
   let draft = ''
   let fills = 0
   const store = new Map<string, unknown>()
-  on('command.register', () => ({ value: { command: 'cad-preview' } }))
+  on('command.register', () => ({ value: { command: 'CAD4Ai' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: '/w' }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'started', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
@@ -175,7 +175,7 @@ test('a broken inbox file is skipped, the batch after it is appended exactly onc
 
 test('the session the user writes in takes over the shared viewer, a started one does not', async ($, on) => {
   const posts: string[] = []
-  on('command.register', () => ({ value: { command: 'cad-preview' } }))
+  on('command.register', () => ({ value: { command: 'CAD4Ai' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: '/w' }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'started', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
@@ -194,13 +194,13 @@ test('the session the user writes in takes over the shared viewer, a started one
   await $.prompt.submit({ text: 'hi', wait: false })
   await new Promise(r => setTimeout(r, 0))
   expect(posts.length).toBe(1)
-  expect(JSON.parse(posts[0]!).data).toContain('.cad-preview')
+  expect(JSON.parse(posts[0]!).data).toContain('.CAD4Ai')
 })
 
 test('a STEP-only export is shown as is, no STL needed', async ($, on) => {
   let written = false
   const writes: { path: string; text: string }[] = []
-  on('command.register', () => ({ value: { command: 'cad-preview' } }))
+  on('command.register', () => ({ value: { command: 'CAD4Ai' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: '/w' }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'started', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))

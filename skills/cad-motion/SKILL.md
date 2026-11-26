@@ -1,9 +1,9 @@
 ---
 name: cad-motion
-description: Use only when the user asks for motion, animation, kinematics, range of motion or to "make it move" for a CAD assembly in the cad-preview viewer (including the "Create motion" request from the viewer's Motion tab). Writes <model>.motion.json next to the model.
+description: Use only when the user asks for motion, animation, kinematics, range of motion or to "make it move" for a CAD assembly in the CAD4Ai viewer (including the "Create motion" request from the viewer's Motion tab). Writes <model>.motion.json next to the model.
 ---
 
-# Motion and kinematics for the cad-preview viewer
+# Motion and kinematics for the CAD4Ai viewer
 
 Only on request: never write a motion file unasked. If an assembly you just built clearly has
 moving parts, you may offer it in one line. `<model>.motion.json` next to `<model>.step` gives

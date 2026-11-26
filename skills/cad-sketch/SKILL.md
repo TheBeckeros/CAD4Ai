@@ -1,9 +1,9 @@
 ---
 name: cad-sketch
-description: Use when the user wants to sketch, draw or brief a part or mechanism before modelling ("let me draw it", "sketch it", /cad-sketch, "náčrt", "skica"), when a message contains "Design brief from the cad-preview sketch pad" or "Snap request from the cad-preview sketch pad", or when the user asks Claude to redraw part of the sketch pad.
+description: Use when the user wants to sketch, draw or brief a part or mechanism before modelling ("let me draw it", "sketch it", /cad-sketch, "náčrt", "skica"), when a message contains "Design brief from the CAD4Ai sketch pad" or "Snap request from the CAD4Ai sketch pad", or when the user asks Claude to redraw part of the sketch pad.
 ---
 
-# Sketch pad (cad-preview)
+# Sketch pad (CAD4Ai)
 
 `<viewer URL>sketch` is an infinite canvas for the early phase: pen with pressure (Apple Pencil on iPad,
 mouse on the desktop), marker, eraser, lasso, text, images, shapes. Ideas pile up there; this session sees nothing
@@ -12,20 +12,20 @@ until the user presses **Send to Claude** (whole canvas) or uses the **Snap ✦*
 ## Opening it from the chat
 
 1. `curl -s <viewer URL>api/ping`; if it fails start the server:
-   `python "<plugin root>/viewer/server.py" --port <viewer port> --data "<cwd>/.cad-preview" --detach`
+   `python "<plugin root>/viewer/server.py" --port <viewer port> --data "<cwd>/.CAD4Ai" --detach`
    (`<plugin root>` is two folders above this skill). For an iPad on the same network the server must be in network mode
-   (`%USERPROFILE%\.cad-preview-lan` exists, or `CAD_PREVIEW_LAN=1`); `curl -s <viewer URL>api/lan` gives the full
+   (`%USERPROFILE%\.CAD4Ai-lan` exists, or `CAD4AI_LAN=1`); `curl -s <viewer URL>api/lan` gives the full
    address `urls[].sketch` with the token: always give it to the user.
 2. Open `<viewer URL>sketch` in the browser pane (`mcp__Claude_Browser__preview_start` with `url`).
 3. One line for the user: draw freely, box a region with Snap ✦ and say how it should change, Send to Claude hands over everything.
 
-## A whole-canvas brief ("Design brief from the cad-preview sketch pad")
+## A whole-canvas brief ("Design brief from the CAD4Ai sketch pad")
 
 The message has the user's text, the canvas PNG (look at it with Read), the texts on the canvas and the path of
 `sketch.json`. Work from the image and the texts; restate the design in 3–6 lines and wait for the go-ahead before
 writing CAD code, unless the user already said to model it. Ask open questions in one short list.
 
-## A snap request ("Snap request from the cad-preview sketch pad")
+## A snap request ("Snap request from the CAD4Ai sketch pad")
 
 The user boxed a region and wrote how it should be redrawn. You get:
 - the instruction, the region `[x, y, w, h]` in canvas units (y grows downwards) and its PNG (`scale` px per unit,

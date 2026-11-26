@@ -1,9 +1,9 @@
 ---
 name: cad-canvas
-description: Use when a message contains "Request from the cad-preview construction canvas" or "Answers to your briefing questions on the cad-preview construction canvas", when the user wants an engineering whiteboard ("konstrukční plátno", "plátno", /cad-canvas), or asks Claude to clean up, redraw, dimension or check a hand-drawn sketch, section, schematic or mechanism on that canvas.
+description: Use when a message contains "Request from the CAD4Ai construction canvas" or "Answers to your briefing questions on the CAD4Ai construction canvas", when the user wants an engineering whiteboard ("konstrukční plátno", "plátno", /cad-canvas), or asks Claude to clean up, redraw, dimension or check a hand-drawn sketch, section, schematic or mechanism on that canvas.
 ---
 
-# Construction canvas (cad-preview)
+# Construction canvas (CAD4Ai)
 
 `<viewer URL>canvas` is the engineer's thinking surface: an infinite canvas where the user writes and sketches freely
 (pen, QuickShape+, lasso, exact lines / circles / arcs, trim, dimensions, 9 layers) and Claude turns marked areas into
@@ -15,16 +15,16 @@ draft. (The button in the panel of a selection sends the selection's area withou
 ## Opening it
 
 1. `curl -s <viewer URL>api/ping`; if it fails start the server:
-   `python "<plugin root>/viewer/server.py" --port <viewer port> --data "<cwd>/.cad-preview" --detach`
+   `python "<plugin root>/viewer/server.py" --port <viewer port> --data "<cwd>/.CAD4Ai" --detach`
    (`<plugin root>` is two folders above this skill).
 2. Open `<viewer URL>canvas` in the browser pane (`mcp__Claude_Browser__preview_start` with `url`).
 3. One line for the user: sketch freely, press Odeslat do AI, drag a box over the area, scribble and comment.
 4. Always also give the full address for a tablet on the same network: `curl -s <viewer URL>api/lan` (only from this PC)
    gives `urls[].canvas` with the token (`http://<pc-ip>:<port>/canvas?t=…`). Network mode is on when
-   `%USERPROFILE%\.cad-preview-lan` exists (or `CAD_PREVIEW_LAN=1`) when the server starts; `lan: false` means it listens
+   `%USERPROFILE%\.CAD4Ai-lan` exists (or `CAD4AI_LAN=1`) when the server starts; `lan: false` means it listens
    only on this PC: offer to create the file and restart the server.
 
-## A request ("Request from the cad-preview construction canvas")
+## A request ("Request from the CAD4Ai construction canvas")
 
 The message has the instruction, the PNG of the region (look at it with Read), the selection summary and a request ID.
 Everything below uses the helper (`<viewer port>` is the port of the viewer; default 8766):
@@ -148,6 +148,6 @@ calculation results as text on the canvas.
 `POST /api/canvas/briefing`, `/preview`, `/status`, `/decide`, `/answer`, `/snapshot`, `/restore`. Do not edit
 `canvas.json` by hand while the server runs.
 
-Sharing: the Soubor menu saves the canvas as one `*.platno.json` (`{format: "cad-preview-canvas", v, objs, layers, regions}`)
+Sharing: the Soubor menu saves the canvas as one `*.platno.json` (`{format: "CAD4Ai-canvas", v, objs, layers, regions}`)
 and opens one (replacing the canvas after a restore point, or adding a copy with fresh ids); `POST /api/canvas/file/save`
 and `/file/open {path, mode: replace|add}` do the same without the dialog.

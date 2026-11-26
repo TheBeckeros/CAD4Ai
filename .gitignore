@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-.cad-preview/
+.CAD4Ai/
 node_modules/
 .pytest_cache/
 *.bak*

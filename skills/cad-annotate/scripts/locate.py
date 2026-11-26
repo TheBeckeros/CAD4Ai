@@ -1,10 +1,10 @@
-"""Determine which B-rep features (faces, edges, vertices) a cad-preview note points at.
+"""Determine which B-rep features (faces, edges, vertices) a CAD4Ai note points at.
 
 Usage:
     python locate.py --step model.step --annotation <path to annotation JSON>
     python locate.py --step model.step --points "x,y,z;x,y,z;..."
 
-The cad-preview viewer stores annotation JSON in <project>/.cad-preview/inbox/.
+The CAD4Ai viewer stores annotation JSON in <project>/.CAD4Ai/inbox/.
 For every selected feature it prints the exact matching B-rep entity. For every
 pen stroke it prints which faces the drawing crosses, which edges and vertices
 are near it or inside its loop, and the most likely target.

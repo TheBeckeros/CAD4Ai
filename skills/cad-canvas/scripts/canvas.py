@@ -1,4 +1,4 @@
-"""Claude's side of the cad-preview construction canvas (the AI <-> editor interface).
+"""Claude's side of the CAD4Ai construction canvas (the AI <-> editor interface).
 
 python canvas.py [--port 8766] <command> ...
   req <req-id>                         get_selection / get_context: the request (instruction, selected objects, neighbours, layers, briefing answers)

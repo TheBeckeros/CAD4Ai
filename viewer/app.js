@@ -1,4 +1,4 @@
-// cad-preview: interactive 3D viewer with feature selection, measurement, section,
+// CAD4Ai: interactive 3D viewer with feature selection, measurement, section,
 // version comparison, notes and parameters.
 import * as THREE from 'three';
 import { TrackballControls } from 'three/addons/controls/TrackballControls.js';

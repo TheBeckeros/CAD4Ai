@@ -6,7 +6,7 @@ export type View = { yaw: number; pitch: number; zoom: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    'cad-preview': {
+    'CAD4Ai': {
       model: Shaped<Model | null>
       view: Shaped<View>
     }

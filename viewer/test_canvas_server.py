@@ -123,7 +123,7 @@ with tempfile.TemporaryDirectory() as d:
     C.ops(d, [line("fl", [0, 0], [50, 0]), {"id": "fd", "t": "dim", "ref": "fl", "off": 8, "edge": 5, "size": 6}])
     f = C.file_save(d, {"path": os.path.join(d, "share.platno.json")})
     saved = json.load(open(f, encoding="utf-8"))
-    assert saved["format"] == "cad-preview-canvas" and any(o["id"] == "fd" and o["edge"] == 1 and o["size"] == 6 for o in saved["objs"])
+    assert saved["format"] == "CAD4Ai-canvas" and any(o["id"] == "fd" and o["edge"] == 1 and o["size"] == 6 for o in saved["objs"])
     n0 = len(C.live(C.load(d)))
     r = C.file_open(d, {"path": f, "mode": "add"})
     live2 = C.live(C.load(d))
