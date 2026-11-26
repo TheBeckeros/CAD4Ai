@@ -499,7 +499,7 @@ type Feature = {
   centroid?: number[]
 }
 type Measure = { index: number; text: string; refs: string[]; from: number[]; to: number[] }
-type Marker = { label: string; type: 'point' | 'line' | 'area'; points: number[][]; faceNormal: number[]; part?: string | null; note: string }
+type Marker = { label: string; type: 'point' | 'line' | 'area'; points: number[][]; faceNormal: number[]; part?: string | null; note: string; features?: (string | null)[] }
 type Annotation = {
   id?: string
   kind?: string
@@ -515,6 +515,8 @@ type Annotation = {
   parts?: string[]
   camera?: { viewDir: number[] }
   screenshot?: string
+  script?: string
+  params?: string[]
   variants?: string[]
   sketch?: string
   req?: string
@@ -531,6 +533,19 @@ const COLORS: Record<string, string> = {
 }
 const vec = (v: number[]): string => `[${v.join(', ')}]`
 const vec1 = (v: number[]): string => `[${v.map(x => Math.round(x * 10) / 10).join(', ')}]`
+
+function markerLines(ms: Marker[]): string[] {
+  const out = ['Markers (model coordinates in mm, Z up):']
+  for (const m of ms) {
+    // the file is data: a short point list or a missing normal must not throw and hold up the inbox
+    const at = (m.points ?? []).map(vec).join(m.type === 'line' ? ' → ' : ' ')
+    out.push(`${m.label}) ${m.type}${m.part ? ` on part ${m.part}` : ''}: ${at}; face normal ${vec(m.faceNormal ?? [0, 0, 0])}`)
+    const feats = [...new Set((m.features ?? []).filter(Boolean))]
+    if (feats.length) out.push(`   on: ${feats.join(' | ')}`)
+    out.push(`   note: ${m.note || '(no note)'}`)
+  }
+  return out
+}
 
 function annotationPrompt(a: Annotation, dataPath?: string): string {
   // the Motion tab button: a plain request, without the cad-annotate trigger phrase
@@ -588,20 +603,18 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
     if (a.id) out.push(`Note ID: ${a.id} (mark it done when all markers are handled, see skill cad-annotate)`)
     if (a.camera?.viewDir) out.push(`Camera view direction: ${vec(a.camera.viewDir)}`)
     if (a.parts && a.parts.length > 1) out.push(`Assembly, parts: ${a.parts.join(', ')}`)
-    out.push('Markers (model coordinates in mm, Z up):')
-    for (const m of ms) {
-      // the file is data: a short point list or a missing normal must not throw and hold up the inbox
-      const at = (m.points ?? []).map(vec).join(m.type === 'line' ? ' → ' : ' ')
-      out.push(`${m.label}) ${m.type}${m.part ? ` on part ${m.part}` : ''}: ${at}; face normal ${vec(m.faceNormal ?? [0, 0, 0])}`)
-      out.push(`   note: ${m.note || '(no note)'}`)
-    }
+    out.push(...markerLines(ms))
     return out.join('\n')
   }
-  const lines = [a.comment, '', `— 3D annotation from CAD4Ai, model ${a.name}`, `Model: ${a.model}`]
+  const marks = a.markers ?? []
+  const lines = [a.comment || (marks.length ? 'Changes at the marked places, see the marker notes.' : ''), '', `— 3D annotation from CAD4Ai, model ${a.name}`, `Model: ${a.model}`]
+  // the screenshot shows what the user means; the lists below give the exact geometry for each label on it
+  if (a.screenshot)
+    lines.push(`Screenshot: ${a.screenshot} (Read it first: the letters are markers, the numbers in orange circles selected features, the blue labels dimensions; they match the lists below)`)
+  if (a.script) lines.push(`Script: ${a.script} (the parametric source: make the change here)`)
+  if (a.params?.length) lines.push(`Parameters: ${a.params.join(', ')}`)
   if (dataPath) lines.push(`Annotation data: ${dataPath} (skill cad-annotate, script locate.py)`)
   if (a.id) lines.push(`Note ID: ${a.id} (mark it done when handled, see skill cad-annotate)`)
-  // the pen draws over the screen, so the image is the record of a drawing; features alone are exact
-  if (a.screenshot && (a.strokes?.length || !a.features?.length)) lines.push(`Screenshot: ${a.screenshot} (view it with the Read tool)`)
   if (a.camera?.viewDir) lines.push(`Camera view direction: ${vec(a.camera.viewDir)}`)
   if (a.parts && a.parts.length > 1) lines.push(`Assembly, parts: ${a.parts.join(', ')}`)
   const strokes = a.strokes ?? []
@@ -618,6 +631,7 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
     lines.push('Dimensions:')
     for (const m of measures) lines.push(`${m.index}) ${m.text} (${m.refs.join(' ↔ ')}; ${vec(m.from)} → ${vec(m.to)})`)
   }
+  if (marks.length) lines.push(...markerLines(marks))
   if (a.section) lines.push(`Section: ${a.section.info ?? ''} (normal ${vec(a.section.normal)}, offset ${a.section.offset} mm)`)
   if (strokes.length) {
     lines.push('Pen drawing (model coordinates in mm, Z up):')
@@ -634,7 +648,7 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
       lines.push(`   points: ${s.points.filter((_, i) => i % step === 0).map(vec1).join(' ')}`)
     }
   }
-  if (!strokes.length && !features.length && !measures.length) lines.push('No drawing or selection: the request applies to the whole model.')
+  if (!strokes.length && !features.length && !measures.length && !marks.length) lines.push('No drawing or selection: the request applies to the whole model.')
   return lines.join('\n')
 }
 

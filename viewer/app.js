@@ -1677,7 +1677,9 @@ function markWorld(pt) {
 function markPick(ev) {
   const pk = pickAt(ev, 'auto');
   if (!pk) return null;
-  return { part: model.parts[pk.part].name, local: pk.local.map(r2), normal: (pk.normal || faceHit(ev)?.normal || [0, 0, 0]).map(r2) };
+  // what lies under the click, in words ("Face #5: cylindrical face (hole) Ø5.5 mm…"): Claude reads it next to the screenshot
+  const inf = entityInfo(pk);
+  return { part: model.parts[pk.part].name, local: pk.local.map(r2), normal: (pk.normal || faceHit(ev)?.normal || [0, 0, 0]).map(r2), feature: `${inf.title}: ${inf.desc}` };
 }
 function markClick(ev) {
   const type = $('markType').value;
@@ -1730,7 +1732,7 @@ function markDrag(ev, i, k, el) {
 function drawMarkers() {
   for (const o of [...markGroup.children]) { o.element?.remove(); dropObj(o); }
   const btn = $('bMarkSend');
-  btn.style.display = markers.length ? '' : 'none'; btn.textContent = `Odeslat vše do chatu (${markers.length})`;
+  btn.style.display = markers.length ? '' : 'none'; btn.textContent = `Send markers (${markers.length})`;
   if (!model.parts.length) return;
   [...markers, ...(markDraft ? [markDraft] : [])].forEach((m, i) => {
     const draft = m === markDraft, sel = i === markSel;
@@ -1767,24 +1769,6 @@ function drawMarkers() {
       setTimeout(() => { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }, 0);
     });
   });
-}
-async function sendMarkers() {
-  if (!model.info || !markers.length) return toast('No markers to send.', true);
-  if (markEdit) closeMarker(true);
-  const camDir = controls.target.clone().sub(camera.position).normalize();
-  const payload = {
-    model: model.info.path, name: model.info.name, step: model.info.step || null, markers: markerRows(markers),
-    camera: { position: arr(camera.position), target: arr(controls.target), up: arr(camera.up), viewDir: arr(camDir), ortho: camera === ortho },
-    parts: model.parts.map(p => p.name),
-  };
-  $('bMarkSend').disabled = true;
-  try {
-    await api('/api/annotate-batch', payload);
-    markers = []; markSel = -1; storeMarkers(); drawMarkers();
-    toast('Added to your chat draft ✔');
-    loadNotes(true);
-  } catch (e) { toast('Sending failed: ' + e.message, true); }
-  finally { $('bMarkSend').disabled = false; }
 }
 
 // ============================================================= parameters
@@ -1925,19 +1909,15 @@ function measureData(onlyId) {
 function openNote(opts = {}) {
   if (!model.info) return toast('No model is loaded.', true);
   modalOpts = opts;
-  renderer.render(scene, camera);
-  // the record for Claude: the 3D view with the screen drawing on top
-  const shot = document.createElement('canvas');
-  shot.width = renderer.domElement.width; shot.height = renderer.domElement.height;
-  const sc = shot.getContext('2d');
-  sc.drawImage(renderer.domElement, 0, 0);
-  drawInk(); sc.drawImage(ink, 0, 0, shot.width, shot.height);
-  $('mShot').src = shot.toDataURL('image/png');
+  if (markEdit) closeMarker(true);
+  // the record for Claude: the view with the drawing, markers, dimensions and numbered selection on it
+  $('mShot').src = composeShot().toDataURL('image/png');
   const rows = [];
   const only = opts.measurementOnly;
   rows.push(['strokes', strokes.length, `Pen drawing (${strokes.length})`, strokes.length > 0 && only === undefined]);
   rows.push(['features', selection.length, `Selected features (${selection.length})`, selection.length > 0 && only === undefined, selection.map(s => entityInfo(s).title).join(', ')]);
   rows.push(['meas', only !== undefined ? 1 : measurements.length, only !== undefined ? `Dimension ${only}` : `Measurements (${measurements.length})`, only !== undefined || measurements.length > 0, only !== undefined ? measurements.find(m => m.id === only)?.text : measurements.map(m => `${m.id}: ${m.text}`).join(', ')]);
+  rows.push(['markers', markers.length, `Markers (${markers.length})`, markers.length > 0 && only === undefined, markers.map((m, i) => `${markerLabel(i)}: ${m.note || '(no note)'}`).join(' · ')]);
   rows.push(['section', section.on ? 1 : 0, 'Current section', section.on, section.on ? $('secInfo').textContent : '']);
   $('mInc').innerHTML = rows.filter(r => r[1] > 0).map(r => `<label><input type="checkbox" data-k="${r[0]}" ${r[3] ? 'checked' : ''}><span>${esc(r[2])}${r[4] ? `<div class="d">${esc(r[4])}</div>` : ''}</span></label>`).join('')
     || '<div class="muted">No drawing or selection: the note will apply to the whole model.</div>';
@@ -1948,8 +1928,9 @@ function openNote(opts = {}) {
 function closeNote() { $('modal').classList.remove('open'); }
 async function sendNote() {
   const comment = $('mText').value.trim();
-  if (!comment) { $('mText').focus(); return toast('Write a request or comment.', true); }
   const inc = k => !!$('mInc').querySelector(`input[data-k="${k}"]`)?.checked;
+  const markD = inc('markers') ? markerRows(markers) : [];
+  if (!comment && !markD.some(m => m.note)) { $('mText').focus(); return toast('Write a request or comment.', true); }
   const strokesD = inc('strokes') ? strokeData() : [];
   const featuresD = inc('features') ? featureData() : [];
   const measD = inc('meas') ? measureData(modalOpts.measurementOnly) : [];
@@ -1957,10 +1938,11 @@ async function sendNote() {
   if (featuresD.length) { anchor = featuresD[0].point || featuresD[0].centroid || featuresD[0].points?.[0]; anchorPart = featuresD[0].part; }
   else if (strokesD.length) { anchor = strokesD[0].center; anchorPart = strokesD[0].part; }
   else if (measD.length) { anchor = measD[0].from; }
+  else if (markD.length) { anchor = markD[0].points[0]; anchorPart = markD[0].part; }
   const camDir = controls.target.clone().sub(camera.position).normalize();
   const payload = {
     model: model.info.path, name: model.info.name, step: model.info.step || null, comment,
-    strokes: strokesD, features: featuresD, measurements: measD,
+    strokes: strokesD, features: featuresD, measurements: measD, markers: markD,
     section: !(inc('section') && section.on) ? null
       : section.mode === 'box' ? { mode: 'box', min: arr(section.box.min), max: arr(section.box.max), info: $('secInfo').textContent }
       : { mode: section.mode, normal: arr(section.plane.normal.clone().multiplyScalar(section.flip ? -1 : 1)), offset: r2(section.d), flip: section.flip, info: $('secInfo').textContent,
@@ -1975,7 +1957,8 @@ async function sendNote() {
     closeNote(); $('mText').value = '';
     if (strokesD.length) clearStrokes();
     if (featuresD.length) clearSelection();
-    toast('Added to your chat draft ✔');
+    if (markD.length) { markers = []; markSel = -1; markEdit = false; storeMarkers(); drawMarkers(); hint(); }
+    toast('Sent to Claude ✔');
     loadNotes(true);
   } catch (e) { toast('Saving the note failed: ' + e.message, true); }
   finally { $('mSend').disabled = false; }
@@ -2012,7 +1995,7 @@ $('tPen').onclick = () => setTool('pen');
 $('tMeasure').onclick = () => setTool('measure');
 $('tMark').onclick = () => setTool('mark');
 $('markType').onchange = () => setTool('mark');
-$('bMarkSend').onclick = sendMarkers;
+$('bMarkSend').onclick = () => openNote();
 $('measMode').onchange = () => { setTool('measure'); };
 $('selFilter').onchange = () => setTool('select');
 document.querySelectorAll('.sw').forEach(b => b.onclick = () => { document.querySelectorAll('.sw').forEach(x => x.classList.remove('on')); b.classList.add('on'); penColor = b.dataset.c; setTool('pen'); });
@@ -2220,28 +2203,47 @@ $('svSave').onclick = () => {
 };
 $('svName').onkeydown = e => { if (e.key === 'Enter') $('svSave').click(); };
 $('bOrtho').onclick = () => setOrtho(camera !== ortho);
-async function saveShot() {
+/**
+ * The view as Claude should see it: the 3D render, the pen drawing, the HTML labels (dimensions, markers, pins)
+ * and a numbered badge on every selected feature. The numbers and letters match the lists in the note text.
+ */
+function composeShot() {
   renderer.render(scene, camera);
-  // dimension labels and pins are HTML: paint them into the screenshot
   const c = document.createElement('canvas');
   c.width = renderer.domElement.width; c.height = renderer.domElement.height;
   const g = c.getContext('2d');
   g.drawImage(renderer.domElement, 0, 0);
+  drawInk(); g.drawImage(ink, 0, 0, c.width, c.height);
   const k = c.width / view.clientWidth;
   const vr = view.getBoundingClientRect();
   g.font = `${12 * k}px Consolas, monospace`; g.textBaseline = 'middle';
   for (const el of labelRenderer.domElement.querySelectorAll('.lbl, .pin')) {
-    if (el.style.display === 'none') continue;
+    if (el.style.display === 'none' || !el.offsetParent) continue;
     const r = el.getBoundingClientRect();
     const x = (r.left - vr.left) * k, y = (r.top - vr.top) * k, w = r.width * k, h = r.height * k;
     if (el.classList.contains('pin')) {
       g.fillStyle = getComputedStyle(el).backgroundColor; g.beginPath(); g.arc(x + w / 2, y + h / 2, w / 2, 0, 7); g.fill();
       g.fillStyle = '#111'; g.textAlign = 'center'; g.fillText(el.textContent, x + w / 2, y + h / 2);
     } else {
-      g.fillStyle = 'rgba(20,22,26,.88)'; g.fillRect(x, y, w, h); g.strokeStyle = '#8fb4ff'; g.strokeRect(x, y, w, h);
+      const mark = el.classList.contains('mark');
+      g.fillStyle = 'rgba(20,22,26,.88)'; g.fillRect(x, y, w, h); g.strokeStyle = mark ? '#e0b050' : '#8fb4ff'; g.lineWidth = 1.5 * k; g.strokeRect(x, y, w, h);
       g.fillStyle = '#fff'; g.textAlign = 'left'; g.fillText(el.textContent, x + 5 * k, y + h / 2);
     }
   }
+  // selected features: badge "1", "2"… at the clicked point, as in "Selected features" of the note
+  const px = { w: c.width, h: c.height };
+  selection.forEach((s, i) => {
+    const s2 = toScreen(toWorld(s.part, s.local), px);
+    if (s2.z > 1) return;
+    const R = 10 * k;
+    g.fillStyle = '#d97757'; g.beginPath(); g.arc(s2.x, s2.y, R, 0, 7); g.fill();
+    g.lineWidth = 2 * k; g.strokeStyle = '#fff'; g.stroke();
+    g.fillStyle = '#fff'; g.textAlign = 'center'; g.font = `700 ${12 * k}px system-ui, sans-serif`; g.fillText(String(i + 1), s2.x, s2.y + 0.5 * k);
+  });
+  return c;
+}
+async function saveShot() {
+  const c = composeShot();
   const r = await api('/api/screenshot', { image: c.toDataURL('image/png') });
   toast('Screenshot saved: ' + r.path.split(/[\\/]/).pop());
   return r.path;

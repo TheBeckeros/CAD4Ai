@@ -293,7 +293,7 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
     </div></div>
     <div class="grp"><span class="cap">Claude</span><div class="tb">
       <button id="bNote" class="primary" title="Create a note for Claude (Enter)">Note for Claude</button>
-      <button id="bMarkSend" class="primary" style="display:none" title="Send all markers and their notes to the chat as one message">Odeslat vše do chatu</button>
+      <button id="bMarkSend" class="primary" style="display:none" title="Send the markers with a screenshot to Claude (the same dialog as Note for Claude)">Send markers</button>
     </div></div>
     <span class="sp"></span>
     <div class="grp end"><span class="cap">Panel</span><div class="tb">
@@ -489,8 +489,8 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
     <div class="inc" id="mInc"></div>
     <img id="mShot" alt="Model screenshot">
     <textarea id="mText" placeholder="What should change? E.g. “M5 through hole here”, “chamfer this edge 2 mm”, “this dimension should be 25 mm”…"></textarea>
-    <div class="muted" style="margin-top:4px">The note is appended to your chat draft. You send it yourself.</div>
-    <div class="foot"><button id="mCancel" class="ghost">Cancel</button><button id="mSend" class="primary">Add to message</button></div>
+    <div class="muted" style="margin-top:4px">Claude gets this screenshot (the numbers and letters on it match the note) and the exact geometry of everything ticked above.</div>
+    <div class="foot"><button id="mCancel" class="ghost">Cancel</button><button id="mSend" class="primary">Send to Claude</button></div>
   </div>
 </div>
 <div id="help">

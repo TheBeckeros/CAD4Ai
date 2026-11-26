@@ -379,5 +379,7 @@ export function markerRows(markers) {
     label: markerLabel(i), type: m.type, points: m.pts.map(p => p.local.map(r2)),
     faceNormal: v3.norm(m.pts.reduce((a, p) => v3.add(a, p.normal || [0, 0, 0]), [0, 0, 0])).map(r2),
     part: m.pts[0]?.part ?? null, note: m.note || '',
+    // the feature under each point, in words, when the viewer recorded it
+    ...(m.pts.some(p => p.feature) ? { features: m.pts.map(p => p.feature || null) } : {}),
   }));
 }

@@ -950,6 +950,15 @@ class Handler(BaseHTTPRequestHandler):
                     with open(png, "wb") as f:
                         f.write(base64.b64decode(image.split(",", 1)[1]))
                     body["screenshot"] = png
+                # where to make the change: the parametric script and its parameters (names and values)
+                try:
+                    script = current().get("script")
+                    if script:
+                        body["script"] = script
+                        body["params"] = [f"{p['name']} = {p['value']}" + (f" [{p['unit']}]" if p["unit"] else "")
+                                          for p in parse_params(script)][:60]
+                except Exception:  # noqa: BLE001 - a script that does not parse must not lose the note
+                    pass
                 body["id"] = sid
                 body["created"] = time.time()
                 tmp = os.path.join(inbox, f"{sid}.tmp")

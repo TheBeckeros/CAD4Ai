@@ -229,12 +229,13 @@ def main():
     shape = cq.importers.importStep(a.step)
     solids = sorted(shape.solids().vals(), key=lambda s: -s.Volume())
 
-    features = []
+    features, markers = [], []
     if a.annotation:
         with open(a.annotation, encoding="utf-8") as f:
             data = json.load(f)
         strokes = [[tuple(p) for p in s["points"]] for s in data.get("strokes", [])]
         features = data.get("features") or []
+        markers = [m for m in data.get("markers") or [] if m.get("points")]
         view_dir = tuple((data.get("camera") or {}).get("viewDir") or ()) or None
         # comment, dimensions and section are already in the chat note, not repeated here
     elif a.points:
@@ -248,7 +249,15 @@ def main():
     for f in features:
         print(f"\nSelected feature {f.get('index')}: {f.get('title')} ({f.get('description')})")
         print(match_feature(solids, f))
-    if not strokes and not features:
+    for m in markers:
+        pts = [tuple(float(c) for c in p) for p in m["points"]]
+        pv = [cq.Vertex.makeVertex(*p) for p in pts]
+        solid = min(solids, key=lambda s: sum(s.distance(v) for v in pv))
+        note = m.get("note") or "(no note)"
+        text = analyze(solid, [pts], view_dir).replace(
+            "\nStroke 1:", f"\nMarker {m.get('label', '?')} {m.get('type', '')} (solid #{solids.index(solid)}), note: {note}:")
+        print(text)
+    if not strokes and not features and not markers:
         print("The note has no drawing or selection: it applies to the whole model.")
         return
     for si, pts in enumerate(strokes, 1):

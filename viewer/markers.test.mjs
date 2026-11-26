@@ -15,4 +15,6 @@ assert.deepStrictEqual(rows[1].faceNormal, [0.71, 0, 0.71], 'mean of unit normal
 assert.strictEqual(rows[1].note, '', 'missing note -> empty');
 assert.deepStrictEqual(rows[2].faceNormal, [0, 0, 0], 'no normals -> zero vector');
 assert.strictEqual(rows[2].points.length, 3);
+const withF = markerRows([{ type: 'point', pts: [{ part: 'base', local: [0, 0, 0], normal: [0, 0, 1], feature: 'Face #3: plane' }] }]);
+assert.deepStrictEqual(withF[0].features, ['Face #3: plane'], 'feature text per point');
 console.log('markers.test: ok');
