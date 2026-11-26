@@ -46,6 +46,18 @@ def ask_folder():
     return path
 
 
+def ask_model(start):
+    import tkinter
+    from tkinter import filedialog
+    root = tkinter.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    path = filedialog.askopenfilename(parent=root, title="Open a model in CAD4Ai", initialdir=start or None,
+                                      filetypes=[("3D models", "*.step *.stp *.stl"), ("All files", "*.*")])
+    root.destroy()
+    return path
+
+
 def vendor(log):
     """Download the viewer's CDN libraries once into viewer/vendor (three.js addons import each other: crawled)."""
     with open(os.path.join(HERE, "app.js"), encoding="utf-8") as f:
@@ -225,3 +237,6 @@ Earlier requests and their screenshots are in `notes/`.
 if __name__ == "__main__":
     if "--ask" in sys.argv:
         print(ask_folder() or "")
+    elif "--ask-model" in sys.argv:
+        sys.stdout.reconfigure(encoding="utf-8")  # paths with diacritics
+        print(ask_model(sys.argv[2] if len(sys.argv) > 2 else "") or "")

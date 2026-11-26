@@ -2702,6 +2702,15 @@ async function saveProject() {
   } catch (e) { toast('Saving the project failed: ' + e.message, true); }
   finally { $('bProject').disabled = false; }
 }
+async function openFile() {
+  $('bOpen').disabled = true;
+  toast('Choose a model file (the dialog may open behind this window)…');
+  try {
+    const r = await api('/api/open/dialog', {});
+    toast(r.cancelled ? 'Opening was cancelled.' : 'Opening ' + r.path.split(/[\\/]/).pop());
+  } catch (e) { toast('Could not open the file: ' + e.message, true); }
+  finally { $('bOpen').disabled = false; }
+}
 async function seedProjectState(info) {
   const flag = 'cadp.seeded:' + info.path;
   try { if (localStorage.getItem(flag)) return; } catch { return; }
@@ -2719,6 +2728,7 @@ async function saveShot() {
   toast('Screenshot saved: ' + r.path.split(/[\\/]/).pop());
   return r.path;
 }
+$('bOpen').onclick = openFile;
 $('bProject').onclick = saveProject;
 $('bShot').onclick = () => saveShot().catch(e => toast('Could not save the screenshot: ' + e.message, true));
 $('bFit').onclick = () => setView('', true, camera.position.clone().sub(controls.target).normalize().toArray());

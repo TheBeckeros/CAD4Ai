@@ -989,6 +989,31 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             return self._send(400, {"error": str(exc)})
         try:
+            if url.path == "/api/open/dialog":  # the "Open file" button: a native file picker on this PC
+                if self.client_address[0] not in ("127.0.0.1", "::1"):  # the dialog would pop up here, not on the tablet
+                    return self._send(403, {"error": "open files from this computer"})
+                if not STATE["data"]:
+                    return self._send(500, {"error": "no data dir"})
+                if not EXPORT_LOCK.acquire(blocking=False):
+                    return self._send(409, {"error": "another dialog or export is already running"})
+                try:
+                    cur = current()
+                    r = subprocess.run([sys.executable, os.path.join(HERE, "project.py"), "--ask-model",
+                                        os.path.dirname(cur["path"]) if cur else ""], capture_output=True, encoding="utf-8",
+                                       timeout=900, creationflags=0x08000000 if os.name == "nt" else 0)
+                finally:
+                    EXPORT_LOCK.release()
+                if r.returncode:
+                    return self._send(500, {"error": (r.stderr or "file dialog failed")[-500:]})
+                path = (r.stdout or "").strip()
+                if not path:
+                    return self._send(200, {"cancelled": True})
+                path = os.path.abspath(path)
+                if not path.lower().endswith(MODEL_EXT) or not os.path.isfile(path):
+                    return self._send(400, {"error": "not a model file (.step, .stp, .stl)"})
+                open_model(path)
+                return self._send(200, {"ok": True, "path": path})
+
             if url.path == "/api/open":
                 path = os.path.abspath(body.get("path") or "")
                 if not path.lower().endswith(MODEL_EXT) or not os.path.isfile(path):
