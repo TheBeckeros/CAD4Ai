@@ -192,7 +192,9 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
 .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
 .lbl{padding:2px 6px;border-radius:5px;background:rgba(31,30,29,.9);border:1px solid var(--accent2);color:#fff;font:11.5px/1.2 ui-monospace,Consolas,monospace;white-space:nowrap;pointer-events:auto;cursor:default}
 .lbl.sel{border-color:var(--accent);color:#f3c2ae}
-.lbl.meas{padding:3px 8px;background:#1f1e1d;font-size:13.5px;font-weight:600;pointer-events:none}
+.lbl.meas{padding:3px 8px;background:#1f1e1d;font-size:13.5px;font-weight:600;pointer-events:none;user-select:none}
+.lbl.meas.sel{border-color:var(--accent);color:#f3c2ae;box-shadow:0 0 0 2px rgba(217,119,87,.35)}
+.lbl.meas.comp{padding:1px 5px;font-size:11px;font-weight:500;background:rgba(31,30,29,.85)}
 .lbl.mark{border-color:#e0b050;cursor:grab;max-width:240px;overflow:hidden;text-overflow:ellipsis}
 .lbl.mark.sel{border-color:var(--accent)}
 .lbl.mark input{width:170px;padding:1px 4px;font:inherit}
@@ -243,7 +245,7 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
         <option value="vertex">Vertex</option><option value="part">Part</option>
       </select></span>
       <span class="ctx" id="ctxMeasure"><select id="measMode" title="Measurement mode">
-        <option value="auto">Auto</option><option value="pp">Point–point</option><option value="angle">Angle</option><option value="dia">Ø / R</option>
+        <option value="auto">Auto</option><option value="pp">Point–point</option><option value="angle">Angle</option><option value="dia">Ø / R</option><option value="one">Single feature</option><option value="min">Min distance (parts)</option>
       </select></span>
       <span class="ctx" id="ctxPen">
         <button class="sw on" data-c="#ff3b30" style="background:#ff3b30" title="Red"></button>
@@ -374,7 +376,7 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
         </div>
         <!-- MEASURE -->
         <div class="tab" id="tab-meas">
-          <div class="d muted" id="measHelp">Measure (M). Auto: click a hole (Ø), or two features for distance / angle. Point–point snaps to vertices and edges.</div>
+          <div class="d muted" id="measHelp">Measure (M). Auto: click a hole (Ø), or two features for distance / angle. Point–point snaps to vertices, edge middles and circle centres. Single feature: area, length or coordinates. Min distance: the gap between two parts. Drag a label to move it, click it and press Delete to remove it, middle click deletes all.</div>
           <div class="row"><label><input type="checkbox" id="measShow" checked> Show dimensions</label><label><input type="checkbox" id="measComp"> ΔX ΔY ΔZ</label></div>
           <div id="measList"></div>
           <div class="row"><button id="measClear" class="danger">Delete all</button></div>

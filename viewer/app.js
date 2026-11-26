@@ -109,6 +109,7 @@ function resize() {
   persp.aspect = w / h; persp.updateProjectionMatrix();
   updateOrthoFrustum();
   for (const m of lineMats) m.resolution.set(w, h);
+  measDirty = true;
   if (composer) composer.setSize(w, h);
   controls.handleResize();
 }
@@ -122,6 +123,8 @@ const selection = [];       // {type, part, id, local:[x,y,z]}
 const strokes = [];         // {color, screen:[[x,y]] css px, hits:[{part, local, normal}], misses:[[x,y]] 0..1}
 const measurements = [];    // see addMeasurement
 let measPicks = [];
+let measSel = null;          // id of the selected dimension (label click or list click), Delete removes it
+let measDirty = false;       // redraw all dimensions on the next frame (camera moved, display changed)
 const section = { on: false, mode: 'z', flip: false, t: 0.5, d: 0, n: new THREE.Vector3(0, 0, 1), plane: new THREE.Plane(), az: 0, el: 90, extra: [], box: new THREE.Box3() };
 const display = { edges: true, wire: false, grid: false, axes: false, look: 'shaded', shadow: false, ao: false, cube: true, triad: true, alpha: 0.4 }; // alpha: opacity of parts marked transparent
 let explode = 0;
@@ -297,7 +300,7 @@ async function loadModel(info, keepCamera) {
   }
   const keepVis = new Map(model.parts.map(p => [p.name, { visible: p.visible, color: p.color, transp: p.transp, mode: p.mode }]));
   disposeModel();
-  clearSelection(); clearStrokes(true); clearMeasurements();
+  clearSelection(); clearStrokes(true); clearMeasurements(true);
   model.parts = srcs.map((s, i) => buildPart(s, i, srcs.length));
   for (const p of model.parts) {
     const k = keepVis.get(p.name);
@@ -326,7 +329,7 @@ async function loadModel(info, keepCamera) {
   $('loading').classList.remove('on');
   renderParts(); renderSelection(); loadParams(); loadVersions(); loadNotes(true); loadMotion(); loadVariants(); loadExplode(); loadMarkers(); loadPartsMeta();
   if (ghost.id) loadGhost(ghost.id);
-  renderSavedViews();
+  renderSavedViews(); restoreMeas();
   if (anaState.kind === 'collide') runCollisions(); else if (anaState.kind) runAnalysis();
 }
 
@@ -416,6 +419,8 @@ let needOutline = false;
   tickMotion();
   controls.update();
   if (needOutline) { needOutline = false; buildOutline(); }
+  if (anim) measDirty = true;
+  if (measDirty) { measDirty = false; for (const m of measurements) drawMeasurement(m); }
   renderMain();
   renderCube();
   renderTriad();
@@ -835,7 +840,7 @@ function computeMeasure(mode, A, B) {
   const refs = B ? [describeEnt(A), describeEnt(B)] : [describeEnt(A)];
   const isRound = e => e.kind === 'cyl' || e.kind === 'circle';
   if (!B) {
-    if (isRound(A)) return { kind: 'dia', value: 2 * A.r, text: `Ø ${fmtn(2 * A.r)} mm (R ${fmtn(A.r)})`, a: { part: A.part, p: A.center }, b: { part: A.part, p: A.point }, round: A, refs };
+    if (isRound(A)) return { kind: 'dia', value: 2 * A.r, text: `Ø ${fmtn(2 * A.r)} mm (R ${fmtn(A.r)})`, a: { part: A.part, p: A.center }, b: { part: A.part, p: A.point }, round: { axis: A.axis, center: A.center, point: A.point, r: A.r }, refs };
     return null;
   }
   const P1 = A.point, P2 = B.point;
@@ -914,31 +919,63 @@ function computeMeasure(mode, A, B) {
   return ptpt();
 }
 
+// ---- dimensions on screen: sizes are in screen pixels (pxWorld) and every dimension is redrawn when the camera moves,
+// so arrows, offsets and arcs keep their size at any zoom and the dimension line stays square to the view
+controls.addEventListener('change', () => { measDirty = true; });
+const MEAS_PX = { off: 34, arrow: 13, ext: 7, arc: 58, lead: 30, dot: 7 };
+/** World length of one CSS pixel at `at` (perspective depends on the depth, orthographic does not). */
+function pxWorld(at) {
+  const h = view.clientHeight || 1;
+  if (camera === ortho) return (ortho.top - ortho.bottom) / ortho.zoom / h;
+  const dir = camera.getWorldDirection(new THREE.Vector3());
+  const depth = Math.max(1e-6, at.clone().sub(camera.position).dot(dir));
+  return 2 * depth * Math.tan(THREE.MathUtils.degToRad(persp.fov / 2)) / h;
+}
+function screenDir(from, dir) {   // unit 2D screen direction (CSS px, y down) of a world direction at a point
+  const px = { w: view.clientWidth, h: view.clientHeight };
+  const a = toScreen(from, px), b = toScreen(from.clone().addScaledVector(dir, pxWorld(from) * 20), px);
+  const v = new THREE.Vector2(b.x - a.x, b.y - a.y);
+  return v.lengthSq() > 1e-9 ? v.normalize() : new THREE.Vector2(1, 0);
+}
+function storeMeas() {
+  if (!model.info) return;
+  const keep = measurements.map(({ objs, label, _drag, ...m }) => m);
+  try { localStorage.setItem('cadp.meas:' + model.info.path, JSON.stringify({ seq: measSeq, list: keep })); } catch { /* per-viewer convenience */ }
+}
+function restoreMeas() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('cadp.meas:' + (model.info?.path || '')) || 'null'); } catch { /* none */ }
+  if (!saved?.list?.length) return;
+  measSeq = Math.max(measSeq, saved.seq || 0);
+  for (const m of saved.list) if (model.parts[m.a?.part] && model.parts[m.b?.part]) { measurements.push(m); drawMeasurement(m); }
+  renderMeasurements();
+}
 function addMeasurement(m) {
   m.id = ++measSeq;
   measurements.push(m);
+  measSel = m.id;
   drawMeasurement(m);
-  renderMeasurements();
+  renderMeasurements(); storeMeas(); hint();
 }
 // measurement drawing helpers: every object owns its geometry and material, disposeMeas frees them
-const MEAS_COLOR = 0x8fb4ff;
+const MEAS_COLOR = 0x8fb4ff, AXIS_COL = [0xe5655a, 0x7cbf8a, 0x7fa7d6];
 function measLine(pts, opts) {
   const g = new LineGeometry(); g.setPositions(pts.flatMap(p => p.toArray()));
   const ln = new Line2(g, lineMat({ color: MEAS_COLOR, linewidth: 1.5, depthTest: false, ...opts }));
   if (opts?.dashed) ln.computeLineDistances();
   ln.renderOrder = 12; return ln;
 }
-const measDash = () => ({ dashed: true, dashSize: model.radius * 0.03, gapSize: model.radius * 0.02 });
-function measPoints(pts, size = 7) {
+const measDash = (at = model.center) => { const k = pxWorld(at); return { dashed: true, dashSize: k * 7, gapSize: k * 5 }; };
+function measPoints(pts, size = MEAS_PX.dot, color = MEAS_COLOR) {
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts.flatMap(p => p.toArray()), 3));
-  const o = new THREE.Points(g, new THREE.PointsMaterial({ color: MEAS_COLOR, size, sizeAttenuation: false, depthTest: false })); o.renderOrder = 12; return o;
+  const o = new THREE.Points(g, new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: false })); o.renderOrder = 12; return o;
 }
-function measLabel(text, pos) {
-  const div = document.createElement('div'); div.className = 'lbl meas'; div.textContent = text;
+function measLabel(text, pos, cls = '') {
+  const div = document.createElement('div'); div.className = `lbl meas ${cls}`; div.textContent = text;
   const l = new CSS2DObject(div); l.position.copy(pos); return l;
 }
 function measArrow(tip, dir, h) {  // cone whose tip sits at `tip`, pointing along `dir`
-  const c = new THREE.Mesh(new THREE.ConeGeometry(h * 0.35, h, 12), new THREE.MeshBasicMaterial({ color: MEAS_COLOR, depthTest: false }));
+  const c = new THREE.Mesh(new THREE.ConeGeometry(h * 0.33, h, 12), new THREE.MeshBasicMaterial({ color: MEAS_COLOR, depthTest: false }));
   c.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir); c.position.copy(tip).addScaledVector(dir, -h / 2); c.renderOrder = 12; return c;
 }
 function disposeMeas(objs) {
@@ -951,88 +988,206 @@ function disposeMeas(objs) {
 let measFirst = [], measPrev = [];   // temporary: marker of the first pick, hover preview
 function clearMeasPrev() { disposeMeas(measPrev); measPrev = []; }
 function clearMeasTemp() { disposeMeas(measFirst); measFirst = []; clearMeasPrev(); }
+/** The label is one persistent HTML element per dimension (it must survive redraws while it is dragged). */
+function measLabelObj(m) {
+  if (!m.label) {
+    m.label = measLabel('', new THREE.Vector3());
+    const el = m.label.element;
+    el.style.pointerEvents = 'auto'; el.style.cursor = 'move';
+    el.addEventListener('pointerdown', ev => {
+      if (ev.button !== 0) return;
+      ev.stopPropagation(); ev.preventDefault();
+      measSel = m.id; renderMeasurements(); measDirty = true;
+      const start = { x: ev.clientX, y: ev.clientY, off: m.offPx ?? null, dir: m._drag?.clone() };
+      // listen on the window: the pointer may leave the label while dragging
+      const move = e => {
+        if (!start.dir) return;
+        const d = (e.clientX - start.x) * start.dir.x + (e.clientY - start.y) * start.dir.y;
+        m.offPx = (start.off ?? defaultOff(m)) + d; measDirty = true;
+      };
+      const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); storeMeas(); };
+      addEventListener('pointermove', move); addEventListener('pointerup', up);
+    });
+  }
+  return m.label;
+}
+const defaultOff = m => (m.kind === 'angle' ? MEAS_PX.arc : m.kind === 'dist' ? MEAS_PX.off : MEAS_PX.lead);
 function drawMeasurement(m) {
   disposeMeas(m.objs);
   m.objs = [];
-  let anchor = null;   // where the label's leader line ends
   const a = toWorld(m.a.part, m.a.p), b = toWorld(m.b.part, m.b.p);
-  const color = 0x8fb4ff;
+  const mid = a.clone().lerp(b, 0.5), k = pxWorld(mid), off = m.offPx ?? defaultOff(m);
+  const camRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0), camUp = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+  let labelPos, anchor = null, dragDir = camRight.clone().add(camUp).normalize();
   if (m.kind === 'dia' && m.round) {
-    // circle around the axis at the clicked point
-    const R = m.round, ax = new THREE.Vector3(...R.axis).normalize();
+    // circle around the axis at the clicked point, diameter with arrows, label on a leader outside the circle
+    const R = m.round, ax = new THREE.Vector3(...R.axis).normalize(), o = partOffset(m.a.part);
     const c = new THREE.Vector3(...R.center); const pp = new THREE.Vector3(...R.point);
     c.addScaledVector(ax, pp.clone().sub(c).dot(ax));
-    const u = new THREE.Vector3().crossVectors(ax, Math.abs(ax.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)).normalize();
+    // the diameter is drawn square to the view, so it reads at any angle
+    let u = new THREE.Vector3().crossVectors(ax, camera.getWorldDirection(new THREE.Vector3()));
+    if (u.lengthSq() < 1e-8) u.crossVectors(ax, Math.abs(ax.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0));
+    u.normalize();
     const w = new THREE.Vector3().crossVectors(ax, u);
     const pts = [];
-    for (let i = 0; i <= 64; i++) { const t = i / 64 * Math.PI * 2; pts.push(...c.clone().addScaledVector(u, Math.cos(t) * R.r).addScaledVector(w, Math.sin(t) * R.r).add(partOffset(m.a.part)).toArray()); }
-    const g = new LineGeometry(); g.setPositions(pts);
-    const ln = new Line2(g, lineMat({ color, linewidth: 2.5, depthTest: false })); ln.renderOrder = 12;
-    const d1 = c.clone().addScaledVector(u, R.r).add(partOffset(m.a.part)), d2 = c.clone().addScaledVector(u, -R.r).add(partOffset(m.a.part));
-    const g2 = new LineGeometry(); g2.setPositions([...d1.toArray(), ...d2.toArray()]);
-    const dl = new Line2(g2, lineMat({ color, linewidth: 1.5, depthTest: false, dashed: true, dashSize: model.radius * 0.03, gapSize: model.radius * 0.02 }));
-    dl.computeLineDistances(); dl.renderOrder = 12;
-    m.objs.push(ln, dl);
-    m.labelPos = d1.clone().lerp(d2, 0.5);
+    for (let i = 0; i <= 64; i++) { const t = i / 64 * Math.PI * 2; pts.push(c.clone().addScaledVector(u, Math.cos(t) * R.r).addScaledVector(w, Math.sin(t) * R.r).add(o)); }
+    const d1 = c.clone().addScaledVector(u, R.r).add(o), d2 = c.clone().addScaledVector(u, -R.r).add(o), kc = pxWorld(d1);
+    m.objs.push(measLine(pts, { linewidth: 2.2 }), measLine([d1, d2], { linewidth: 1.4 }),
+      measArrow(d1, u.clone(), MEAS_PX.arrow * kc), measArrow(d2, u.clone().negate(), MEAS_PX.arrow * kc));
+    anchor = d1; labelPos = d1.clone().addScaledVector(u, off * kc); dragDir = u;
+    m.objs.push(measLine([d1, labelPos], { linewidth: 1 }));
   } else if (m.kind === 'angle' && m.vertex) {
-    // arc between the two legs at the vertex, value at the arc midpoint
+    // arc between the two legs at the vertex, radius in screen pixels
     const V = toWorld(m.vertex.part, m.vertex.p), u = new THREE.Vector3(...m.u).normalize(), w = new THREE.Vector3(...m.w).normalize();
-    const R = model.radius * 0.12, th = Math.acos(THREE.MathUtils.clamp(u.dot(w), -1, 1));
+    const R = Math.abs(off) * pxWorld(V), th = Math.acos(THREE.MathUtils.clamp(u.dot(w), -1, 1));
     const e2 = w.clone().addScaledVector(u, -u.dot(w));
     if (e2.lengthSq() < 1e-12) e2.crossVectors(u, Math.abs(u.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0));
     e2.normalize();
     const at = (t, r) => V.clone().addScaledVector(u, Math.cos(t) * r).addScaledVector(e2, Math.sin(t) * r);
-    const arc = []; for (let i = 0; i <= 32; i++) arc.push(at(th * i / 32, R));
-    m.objs.push(measLine(arc, { linewidth: 2 }), measLine([V, V.clone().addScaledVector(u, R * 1.4)], { linewidth: 1 }), measLine([V, V.clone().addScaledVector(w, R * 1.4)], { linewidth: 1 }), measPoints([a, b]));
-    m.labelPos = at(th / 2, R * 1.6); anchor = at(th / 2, R);
+    const arc = []; for (let i = 0; i <= 40; i++) arc.push(at(th * i / 40, R));
+    const kv = pxWorld(V), h = MEAS_PX.arrow * kv;
+    const tan0 = e2.clone(), tan1 = u.clone().multiplyScalar(-Math.sin(th)).addScaledVector(e2, Math.cos(th));
+    m.objs.push(measLine(arc, { linewidth: 2 }), measLine([V, V.clone().addScaledVector(u, R * 1.15)], { linewidth: 1 }), measLine([V, V.clone().addScaledVector(w, R * 1.15)], { linewidth: 1 }),
+      measArrow(at(0, R), tan0.negate(), h), measArrow(at(th, R), tan1, h), measPoints([a, b]));
+    anchor = at(th / 2, R); labelPos = at(th / 2, R + 18 * kv); dragDir = anchor.clone().sub(V).normalize();
   } else if (m.kind === 'dist' && a.distanceTo(b) > 1e-9) {
-    // dimension line offset sideways (fixed at draw time, perpendicular to the segment and the view), extension lines, arrowheads
-    const dir = b.clone().sub(a).normalize(), view = camera.getWorldDirection(new THREE.Vector3());
-    const off = new THREE.Vector3().crossVectors(dir, view);
-    if (off.lengthSq() < 1e-8) off.copy(camera.up).addScaledVector(dir, -camera.up.dot(dir));
-    if (off.lengthSq() < 1e-8) off.crossVectors(dir, Math.abs(dir.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0));
-    off.normalize().multiplyScalar(model.radius * 0.08);
-    const a2 = a.clone().add(off), b2 = b.clone().add(off), h = model.radius * 0.03;
-    m.objs.push(measLine([a2, b2], { linewidth: 2 }), measLine([a, a2.clone().addScaledVector(off, 0.2)], { linewidth: 1 }), measLine([b, b2.clone().addScaledVector(off, 0.2)], { linewidth: 1 }),
-      measArrow(a2, dir.clone().negate(), h), measArrow(b2, dir, h), measPoints([a, b]));
-    anchor = a2.clone().lerp(b2, 0.5); m.labelPos = anchor.clone().addScaledVector(off, 0.8);
+    // dimension line offset sideways, square to the segment and the current view; extension lines past it, arrowheads
+    const dir = b.clone().sub(a).normalize(), vd = camera.getWorldDirection(new THREE.Vector3());
+    const side = new THREE.Vector3().crossVectors(dir, vd);
+    if (side.lengthSq() < 1e-8) side.copy(camUp).addScaledVector(dir, -camUp.dot(dir));
+    side.normalize();
+    // keep the side the label was on: flip so the side points up/right on screen
+    if (side.dot(camUp) + side.dot(camRight) * 0.3 < 0) side.negate();
+    const a2 = a.clone().addScaledVector(side, off * k), b2 = b.clone().addScaledVector(side, off * k), h = MEAS_PX.arrow * k;
+    const ext = Math.sign(off || 1) * MEAS_PX.ext * k;
+    const inside = a.distanceTo(b) > 2.6 * h;   // arrows outside when the dimension is too short for them
+    m.objs.push(measLine([a2, b2], { linewidth: 1.8 }), measLine([a, a2.clone().addScaledVector(side, ext)], { linewidth: 1 }), measLine([b, b2.clone().addScaledVector(side, ext)], { linewidth: 1 }),
+      measArrow(a2, inside ? dir.clone().negate() : dir.clone(), h), measArrow(b2, inside ? dir.clone() : dir.clone().negate(), h), measPoints([a, b]));
+    if (!inside) m.objs.push(measLine([a2.clone().addScaledVector(dir, -3 * h), b2.clone().addScaledVector(dir, 3 * h)], { linewidth: 1.2 }));
+    labelPos = a2.clone().lerp(b2, 0.5).addScaledVector(side, Math.sign(off || 1) * 14 * k); dragDir = side;
+    // ΔX ΔY ΔZ drawn as three axis-coloured legs from A to B
+    if ($('measComp').checked && m.comp) {
+      let p = a.clone();
+      [0, 1, 2].forEach(i => {
+        if (Math.abs(m.comp[i]) < 1e-6) return;
+        const q = p.clone(); q.setComponent(i, q.getComponent(i) + m.comp[i]);
+        m.objs.push(measLine([p, q], { color: AXIS_COL[i], linewidth: 1.4, ...measDash(p) }));
+        const l = measLabel(`${'XYZ'[i]} ${fmtn(Math.abs(m.comp[i]))}`, p.clone().lerp(q, 0.5), 'comp'); l.element.style.borderColor = '#' + AXIS_COL[i].toString(16).padStart(6, '0');
+        m.objs.push(l); p = q;
+      });
+    }
+  } else if (m.kind === 'info') {
+    // one feature: dot and a label on a short leader up-right on screen
+    const kp = pxWorld(a);
+    m.objs.push(measPoints([a], 9));
+    anchor = a; dragDir = camRight.clone().add(camUp).normalize(); labelPos = a.clone().addScaledVector(dragDir, off * kp);
+    m.objs.push(measLine([a, labelPos], { linewidth: 1 }));
   } else {
-    m.objs.push(measLine([a, b], { linewidth: 2, ...measDash() }), measPoints([a, b]));
-    m.labelPos = a.clone().lerp(b, 0.5);
+    m.objs.push(measLine([a, b], { linewidth: 2, ...measDash(mid) }), measPoints([a, b]));
+    labelPos = mid;
   }
   let text = m.text;
-  if ($('measComp').checked && m.comp) text += `  ΔX ${fmtn(m.comp[0])} ΔY ${fmtn(m.comp[1])} ΔZ ${fmtn(m.comp[2])}`;
-  m.objs.push(measLabel(`${m.id}: ${text}`, m.labelPos));
-  if (anchor) m.objs.push(measLine([m.labelPos, anchor], { linewidth: 1 }));
+  if ($('measComp').checked && m.comp && m.kind !== 'dist') text += `  ΔX ${fmtn(m.comp[0])} ΔY ${fmtn(m.comp[1])} ΔZ ${fmtn(m.comp[2])}`;
+  const lbl = measLabelObj(m);
+  lbl.element.textContent = `${m.id}: ${text}`;
+  lbl.element.classList.toggle('sel', m.id === measSel);
+  lbl.position.copy(labelPos);
+  if (lbl.parent !== measGroup) measGroup.add(lbl);
+  m._drag = screenDir(labelPos, dragDir);
+  // a label on a leader starts at the leader's end instead of covering it
+  if (anchor) { const d = m._drag.clone().multiplyScalar(Math.sign(off || 1)); lbl.center.set(d.x > 0.35 ? 0 : d.x < -0.35 ? 1 : 0.5, d.y > 0.35 ? 0 : d.y < -0.35 ? 1 : 0.5); }
+  else lbl.center.set(0.5, 0.5);
   for (const o of m.objs) measGroup.add(o);
   measGroup.visible = $('measShow').checked;
 }
 function removeMeasurement(id) {
   const i = measurements.findIndex(m => m.id === id);
   if (i < 0) return;
-  disposeMeas(measurements[i].objs);
+  disposeMeas(measurements[i].objs); disposeMeas([measurements[i].label]);
   measurements.splice(i, 1);
-  renderMeasurements();
+  if (measSel === id) measSel = null;
+  renderMeasurements(); storeMeas();
 }
-function clearMeasurements() { for (const m of [...measurements]) removeMeasurement(m.id); measPicks = []; clearMeasTemp(); renderMeasurements(); }
+function clearMeasurements(keepStore) {
+  for (const m of [...measurements]) { disposeMeas(m.objs); disposeMeas([m.label]); }
+  measurements.length = 0; measSel = null; measPicks = []; clearMeasTemp(); renderMeasurements();
+  if (!keepStore) storeMeas();
+}
 function renderMeasurements() {
   $('nMeas').textContent = measurements.length;
   const el = $('measList');
-  el.innerHTML = measurements.map(m => `<div class="item"><div class="t">${m.id}: ${esc(m.text)}</div>
+  el.innerHTML = measurements.map(m => `<div class="item ${m.id === measSel ? 'sel' : ''}" data-id="${m.id}"><div class="t">${m.id}: ${esc(m.text)}</div>
     <div class="d">${esc(m.refs.join(' ↔ '))}${m.comp ? `<br>ΔX ${fmtn(m.comp[0])} · ΔY ${fmtn(m.comp[1])} · ΔZ ${fmtn(m.comp[2])} mm` : ''}</div>
-    <div class="acts"><button data-id="${m.id}" data-a="note">Request for this dimension…</button><button data-id="${m.id}" data-a="rm" class="danger">Delete</button></div></div>`).join('')
+    <div class="acts"><button data-id="${m.id}" data-a="note">Request for this dimension…</button><button data-id="${m.id}" data-a="copy" title="Copy the value">Copy</button><button data-id="${m.id}" data-a="rm" class="danger">Delete</button></div></div>`).join('')
     || '<div class="muted">No measurements yet.</div>';
+  el.querySelectorAll('.item[data-id]').forEach(it => it.onclick = e => { if (e.target.closest('button')) return; measSel = +it.dataset.id; renderMeasurements(); measDirty = true; });
   el.querySelectorAll('button').forEach(b => b.onclick = () => {
-    const id = +b.dataset.id;
+    const id = +b.dataset.id, m = measurements.find(x => x.id === id);
     if (b.dataset.a === 'rm') removeMeasurement(id);
+    else if (b.dataset.a === 'copy') navigator.clipboard?.writeText(m.value !== undefined ? fmtn(m.value) : m.text).then(() => toast('Copied: ' + fmtn(m.value)), () => toast('The browser did not allow copying.', true));
     else openNote({ measurementOnly: id });
   });
 }
-function measureClick(pick, shift) {
+/** Point-point mode: a click near the middle of a straight edge snaps to the middle, on a circular edge to its centre. */
+function snapPick(pick, ev) {
+  if (pick?.type !== 'edge' || !ev) return pick;
+  const p = model.parts[pick.part], e = p.an.edges[pick.id], px = { w: view.clientWidth, h: view.clientHeight }, mouse = eventPx(ev);
+  const near = (local, r) => { const s = toScreen(toWorld(pick.part, local), px); return Math.hypot(s.x - mouse.x, s.y - mouse.y) < r; };
+  if ((e.type === 'circle' || e.type === 'arc') && e.center) return { ...pick, local: [...e.center], snap: 'centre' };
+  if (e.type === 'line') {
+    const m = e.points[0].map((c, i) => (c + e.points[e.points.length - 1][i]) / 2);
+    if (near(m, 14)) return { ...pick, local: m, snap: 'middle' };
+  }
+  return pick;
+}
+/** One feature on its own: area of a face, length of an edge, coordinates of a point. */
+function infoMeasure(pick) {
+  const p = model.parts[pick.part], refs = [entityInfo(pick).title];
+  const at = { part: pick.part, p: pick.local.slice() };
+  if (pick.type === 'face') {
+    const f = p.an.faces[pick.id];
+    const t = f.type === 'cylinder' ? `Ø ${fmtn(2 * f.radius)} · L ${fmtn(f.length)} · A ${fmtn(f.area)} mm²` : `A ${fmtn(f.area)} mm²${f.type === 'plane' ? ` · n ${fmtv(f.normal)}` : ''}`;
+    return { kind: 'info', value: f.area, text: t, a: at, b: at, refs };
+  }
+  if (pick.type === 'edge') {
+    const e = p.an.edges[pick.id];
+    const t = e.type === 'line' ? `L ${fmtn(e.length)} mm` : e.radius ? `R ${fmtn(e.radius)} (Ø ${fmtn(2 * e.radius)}) · L ${fmtn(e.length)} mm` : `L ${fmtn(e.length)} mm`;
+    return { kind: 'info', value: e.length, text: t, a: at, b: at, refs };
+  }
+  const v = pick.type === 'vertex' ? p.an.verts[pick.id].p : pick.local;
+  const w = toWorld(pick.part, v);
+  return { kind: 'info', value: 0, text: `X ${fmtn(v[0])}  Y ${fmtn(v[1])}  Z ${fmtn(v[2])}`, a: { part: pick.part, p: v.slice() }, b: { part: pick.part, p: v.slice() }, refs, world: w.toArray() };
+}
+/** Shortest distance between two parts (their meshes in the current placement). */
+function minDistance(ia, ib) {
+  const A = model.parts[ia], B = model.parts[ib];
+  const oa = partOffset(ia), ob = partOffset(ib);
+  const M = new THREE.Matrix4().makeTranslation(ob.x - oa.x, ob.y - oa.y, ob.z - oa.z);   // B local -> A local
+  const t1 = {}, t2 = {};
+  A.geo.boundsTree.closestPointToGeometry(B.geo, M, t1, t2);
+  // three-mesh-bvh gives target1 in A's frame and target2 already back in B's own frame
+  const p1 = t1.point.clone(), p2 = t2.point.clone();
+  const d = t1.distance;
+  return { kind: 'dist', value: d, text: d < 1e-4 ? 'touching / overlapping (0 mm)' : `min ${fmtn(d)} mm`, comp: v3.sub(p2.clone().add(ob).toArray(), p1.clone().add(oa).toArray()),
+    a: { part: ia, p: p1.toArray() }, b: { part: ib, p: p2.toArray() }, refs: [`Part ${A.name}`, `Part ${B.name}`] };
+}
+function measureClick(pick, shift, ev) {
   clearMeasPrev();
   if (!pick) return;
   const mode = $('measMode').value;
+  if (mode === 'one') return addMeasurement(infoMeasure(pick));
+  if (mode === 'min') {
+    measPicks.push({ part: pick.part, obj: highlight({ type: 'part', part: pick.part, id: pick.part }, 0x8fb4ff, true) });
+    if (measPicks.length < 2) { hint(); return; }
+    const [A, B] = measPicks;
+    for (const mp of measPicks) dropObj(mp.obj);
+    measPicks = []; clearMeasTemp(); hint();
+    if (A.part === B.part) return toast('Pick two different parts.', true);
+    return addMeasurement(minDistance(A.part, B.part));
+  }
+  if (mode === 'pp') pick = snapPick(pick, ev);
   const e = entGeom(pick);
+  if (pick.snap) e.kind = 'point', e.point = pick.local.slice();
   if (mode === 'dia') {
     const m = computeMeasure('auto', e);
     if (!m) return toast('Click a hole, pin or circular edge.', true);
@@ -1054,20 +1209,25 @@ function measureClick(pick, shift) {
   } else {
     // show the first point right away
     measFirst = [measPoints([toWorld(e.part, e.point)], 11)];
-    if (mode === 'pp') measFirst.push(measLabel('Click the second point', toWorld(e.part, e.point)));
+    if (mode === 'pp') measFirst.push(measLabel(pick.snap ? `${pick.snap} · click the second point` : 'Click the second point', toWorld(e.part, e.point)));
     for (const o of measFirst) measGroup.add(o);
     measGroup.visible = $('measShow').checked;
     hint();
   }
 }
 // hover preview while one pick is held: dashed line and value to the feature under the cursor
-function measPreview(pk) {
+function measPreview(pk, ev) {
   clearMeasPrev();
-  if (tool !== 'measure' || measPicks.length !== 1 || !pk) return;
-  const m = computeMeasure($('measMode').value, measPicks[0].e, entGeom(pk));
+  const mode = $('measMode').value;
+  if (tool !== 'measure' || measPicks.length !== 1 || !pk || mode === 'min' || mode === 'one') return;
+  if (mode === 'pp') pk = snapPick(pk, ev);
+  const e = entGeom(pk);
+  if (pk.snap) e.kind = 'point', e.point = pk.local.slice();
+  const m = computeMeasure(mode, measPicks[0].e, e);
   if (!m || m.error || !m.a || !m.b) return;
   const a = toWorld(m.a.part, m.a.p), b = toWorld(m.b.part, m.b.p);
-  measPrev = [measLine([a, b], { linewidth: 1.5, ...measDash() }), measLabel(m.text, a.clone().lerp(b, 0.5))];
+  measPrev = [measLine([a, b], { linewidth: 1.5, ...measDash(a.clone().lerp(b, 0.5)) }), measLabel(m.text, a.clone().lerp(b, 0.5))];
+  if (pk.snap) measPrev.push(measPoints([toWorld(pk.part, pk.local)], 11, 0xd97757));
   for (const o of measPrev) measGroup.add(o);
 }
 
@@ -2075,7 +2235,7 @@ function hint() {
       : 'Left = draw over the view · middle = rotate · right = pan · wheel = zoom (locked once you draw)',
     mark: markDraft ? (markDraft.type === 'area' ? `Click more points · click the first point or Enter = close the area (${markDraft.pts.length} so far) · Esc = cancel` : 'Click point B · Esc = cancel')
       : 'Click the model = new marker (type in Options) · click a label = edit · drag = move · Delete = remove',
-    measure: measPicks.length ? ($('measMode').value === 'pp' ? 'Click the second point · Esc = cancel' : 'Pick the second feature · Esc = cancel') : ({ auto: 'Click a hole (Ø) or the first of two features', pp: 'Click the first point (snaps to vertices/edges)', angle: 'Click the first plane or edge', dia: 'Click a hole, pin or circular edge' })[$('measMode').value],
+    measure: measPicks.length ? ($('measMode').value === 'min' ? 'Click the second part · Esc = cancel' : $('measMode').value === 'pp' ? 'Click the second point (snaps to edge middles and circle centres) · Esc = cancel' : 'Pick the second feature · Esc = cancel') : ({ auto: 'Click a hole (Ø) or the first of two features', pp: 'Click the first point (snaps to vertices/edges)', angle: 'Click the first plane or edge', dia: 'Click a hole, pin or circular edge', one: 'Click a face (area), edge (length) or vertex (coordinates)', min: 'Click the first part' })[$('measMode').value],
   }[tool];
   $('hint').textContent = h + (strokes.length && tool !== 'pen' ? ' · view locked by the drawing: send the note or clear it 🗑' : '');
 }
@@ -2145,7 +2305,7 @@ cvs.addEventListener('pointermove', ev => {
     const filter = tool === 'select' ? $('selFilter').value : 'auto';
     const pk = (tool === 'select' || tool === 'measure' || tool === 'mark') ? pickAt(e, filter) : null;
     setHover(pk);
-    if (measPicks.length || measPrev.length) measPreview(pk);
+    if (measPicks.length || measPrev.length) measPreview(pk, e);
     const h = pk || faceHit(e);
     if (pk) { const inf = entityInfo(pk); $('hover').textContent = `${inf.title}: ${inf.desc} · point ${fmtv(pk.local)}`; }
     else if (h) $('hover').textContent = `point ${fmtv(h.local)} · ${model.parts.length > 1 ? model.parts[h.part].name + ' · ' : ''}face #${h.faceId}${anaReadout(h)}`;
@@ -2172,7 +2332,7 @@ cvs.addEventListener('pointerup', ev => {
     if (!pk) { if (!ev.shiftKey) clearSelection(); return; }
     toggleSelect(pk, ev.shiftKey);
   } else if (tool === 'measure') {
-    measureClick(pickAt(ev, 'auto'), ev.shiftKey);
+    measureClick(pickAt(ev, $('measMode').value === 'min' ? 'part' : 'auto'), ev.shiftKey, ev);
   } else if (tool === 'mark') markClick(ev);
 });
 cvs.addEventListener('pointercancel', () => { endStroke(); pivot = null; });
@@ -2394,7 +2554,7 @@ $('partsAlpha').oninput = e => { display.alpha = 1 - e.target.value / 100; $('pa
 
 // --- measurement
 $('measShow').onchange = e => { measGroup.visible = e.target.checked; };
-$('measComp').onchange = () => { for (const m of measurements) drawMeasurement(m); };
+$('measComp').onchange = () => { measDirty = true; };
 $('measClear').onclick = clearMeasurements;
 
 // --- section
@@ -2491,6 +2651,7 @@ addEventListener('keydown', e => {
   else if (k === 'm') setTool('measure');
   else if (k === 'k') setTool('mark');
   else if ((k === 'delete' || k === 'backspace') && markSel >= 0) deleteMarker(markSel);
+  else if ((k === 'delete' || k === 'backspace') && measSel !== null) removeMeasurement(measSel);
   else if (k === 'f') $('bFit').click();
   else if (k === 'p') setOrtho(camera !== ortho);
   else if (k === 'x') setSectionOn(!section.on);
