@@ -523,6 +523,7 @@ type Annotation = {
   screenshot?: string
   script?: string
   params?: string[]
+  paint?: { part: string; face: number | null; color: string; name?: string; description: string; centroid?: number[] }[]
   variants?: string[]
   sketch?: string
   req?: string
@@ -638,6 +639,13 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
     for (const m of measures) lines.push(`${m.index}) ${m.text} (${m.refs.join(' ↔ ')}; ${vec(m.from)} → ${vec(m.to)})`)
   }
   if (marks.length) lines.push(...markerLines(marks))
+  const paint = a.paint ?? []
+  if (paint.length) {
+    // the colours mark places: the user's request says what each colour means
+    lines.push('Painted in the viewer (the colours mark places; the request says what they mean):')
+    for (const x of paint)
+      lines.push(`- ${x.name ? `${x.name} ` : ''}${x.color} part ${x.part}: ${x.face === null ? 'whole part' : `face #${x.face}, ${x.description}${x.centroid ? ` at ${vec(x.centroid)}` : ''}`}`)
+  }
   if (a.section) lines.push(`Section: ${a.section.info ?? ''} (normal ${vec(a.section.normal)}, offset ${a.section.offset} mm)`)
   if (strokes.length) {
     lines.push('Pen drawing (model coordinates in mm, Z up):')
@@ -654,7 +662,7 @@ function annotationPrompt(a: Annotation, dataPath?: string): string {
       lines.push(`   points: ${s.points.filter((_, i) => i % step === 0).map(vec1).join(' ')}`)
     }
   }
-  if (!strokes.length && !features.length && !measures.length && !marks.length) lines.push('No drawing or selection: the request applies to the whole model.')
+  if (!strokes.length && !features.length && !measures.length && !marks.length && !paint.length) lines.push('No drawing or selection: the request applies to the whole model.')
   return lines.join('\n')
 }
 

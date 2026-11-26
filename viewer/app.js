@@ -261,7 +261,7 @@ function buildPart(src, i, count) {
   pose.add(group);
   const bb = geo.boundingBox;
   return {
-    index: i, name: src.name, path: src.path || [], an, geo, bvhGeo, mesh, cap, edgesObj, group, pose, mat, mats, alert: false, baseCol, faceTint: !!baseCol,
+    index: i, name: src.name, path: src.path || [], an, geo, bvhGeo, mesh, cap, edgesObj, group, pose, mat, mats, alert: false, baseCol, faceTint: !!baseCol, vtint: !!baseCol, paint: new Map(), paintRev: 0, vSig: '',
     // per-part display: '' follows the Display menu; a mesh without B-rep faces (STL, scan) with
     // thousands of estimated edges would be a black tangle, so it starts shaded without edges
     mode: !src.faceRanges && an.edges.length > 1500 ? 'shaded' : '',
@@ -329,7 +329,7 @@ async function loadModel(info, keepCamera) {
   $('loading').classList.remove('on');
   renderParts(); renderSelection(); loadParams(); loadVersions(); loadNotes(true); loadMotion(); loadVariants(); loadExplode(); loadMarkers(); loadPartsMeta();
   if (ghost.id) loadGhost(ghost.id);
-  renderSavedViews(); restoreMeas();
+  renderSavedViews(); restoreMeas(); restorePaint();
   if (paramT) {
     const tot = (performance.now() - paramT.t0 + paramT.script) / 1000;
     renderParamsState(`Done in ${tot.toFixed(1)} s (script ${(paramT.script / 1000).toFixed(2)} s${paramT.warm === false ? ', cold start' : ''}, model reload ${((performance.now() - paramT.t0) / 1000).toFixed(1)} s): ${paramT.changes.join(', ')}`);
@@ -1401,18 +1401,35 @@ function setSectionOn(on) { section.on = on; $('secOn').checked = on; updateSect
 
 // ===================================================== parts, exploded view
 /** Vertex colours back to the part's own look: STEP face colours while the part keeps its STEP colour, otherwise white (the material colour shows). */
+/**
+ * Vertex colours back to the part's own look. While the vertex colours carry the colour (p.vtint), the material is white:
+ * STEP face colours while the part keeps its STEP colour, otherwise the part colour, and painted faces (Paint tool) on top.
+ */
+/** The part still has the colour it was loaded with (compared as 8-bit sRGB: a hex round trip must not count as a change). */
+const ownColor = p => p.color.getHex() === p.defaultColor.getHex();
+const paintSig = p => `${p.baseCol && ownColor(p) ? 'step' : p.color.getHex()}:${p.paintRev}`;
 function resetVertexColors(p) {
   const arr = p.geo.attributes.color.array;
-  p.faceTint = !!p.baseCol && p.color.equals(p.defaultColor);
-  if (p.faceTint) arr.set(p.baseCol); else arr.fill(1);
+  p.faceTint = !!p.baseCol && ownColor(p);
+  p.vtint = p.faceTint || p.paint.size > 0;
+  if (!p.vtint) arr.fill(1);
+  else {
+    if (p.faceTint) arr.set(p.baseCol);
+    else for (let i = 0; i < arr.length; i += 3) { arr[i] = p.color.r; arr[i + 1] = p.color.g; arr[i + 2] = p.color.b; }
+    if (p.paint.size) {
+      const fid = p.geo.attributes.faceId.array, cols = new Map([...p.paint].map(([f, hex]) => [f, new THREE.Color(hex)]));
+      for (let v = 0; v < fid.length; v++) { const c = cols.get(fid[v]); if (c) { arr[v * 3] = c.r; arr[v * 3 + 1] = c.g; arr[v * 3 + 2] = c.b; } }
+    }
+  }
+  p.vSig = paintSig(p);
   p.geo.attributes.color.needsUpdate = true;
 }
 function applyPartLook(p) {
   p.mat = p.mats[display.look]; p.mesh.material = p.mat;
-  // the user picked another colour for a part with STEP face colours: the face colours give way to it
-  if (p.baseCol && !anaState.kind && !ghost.geo && p.faceTint !== p.color.equals(p.defaultColor)) resetVertexColors(p);
-  // a colour map paints vertex colours, so the base colour goes white while it is shown; so do STEP face colours
-  p.mat.color.copy(anaState.kind || p.faceTint ? WHITE : p.color);
+  // part colour or paint changed: rebuild the vertex colours (a part colour replaces the STEP face colours, paint stays on top)
+  if (!anaState.kind && !ghost.geo && p.vSig !== paintSig(p)) resetVertexColors(p);
+  // a colour map paints vertex colours, so the base colour goes white while it is shown; so do STEP face colours and paint
+  p.mat.color.copy(anaState.kind || p.vtint ? WHITE : p.color);
   if (p.alert) p.mat.color.lerp(ALERT, 0.75);
   const xr = display.look === 'xray', op = partAlpha(p);
   p.mat.transparent = xr || op < 1; p.mat.opacity = xr ? 0.65 * op : op; p.mat.depthWrite = !xr && op >= 1;
@@ -2028,6 +2045,111 @@ function drawMarkers() {
   });
 }
 
+// ================================================================= paint
+// Paint tool (B): click or drag over faces (or whole parts) to colour them; Alt+click picks a colour from the model.
+// Painted faces sit on top of the part and STEP colours (resetVertexColors), are kept per model in this browser
+// and go to Claude with a note, so colours can mark places ("the red faces get a 1 mm chamfer").
+let paintColor = '#e0533d', painting = false, paintStroke = [], paintUndo = [];
+const paintKey = () => 'cadp.paint:' + (model.info?.path || '');
+function storePaint() {
+  const out = {};
+  for (const p of model.parts) {
+    const e = {};
+    if (!ownColor(p)) e.color = '#' + p.color.getHexString();
+    if (p.paint.size) e.faces = Object.fromEntries(p.paint);
+    if (Object.keys(e).length) out[p.name] = e;
+  }
+  try { localStorage.setItem(paintKey(), JSON.stringify(out)); } catch { /* per-viewer convenience */ }
+}
+function restorePaint() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(paintKey()) || '{}'); } catch { /* none */ }
+  for (const p of model.parts) {
+    const e = saved[p.name];
+    if (!e) continue;
+    if (e.color) p.color.set(e.color);
+    if (e.faces) p.paint = new Map(Object.entries(e.faces).filter(([f]) => +f < p.an.faces.length).map(([f, c]) => [+f, c]));
+    p.paintRev++; applyPartLook(p);
+  }
+  paintUndo = [];
+}
+function setPaintColor(hex) {
+  paintColor = hex.toLowerCase();
+  $('paintColor').value = paintColor;
+  document.querySelectorAll('#paintSw .psw').forEach(b => b.classList.toggle('on', b.dataset.c === paintColor));
+}
+function paintAt(ev) {
+  const h = faceHit(ev);
+  if (!h) return;
+  const p = model.parts[h.part];
+  if ($('paintMode').value === 'part') {
+    if ('#' + p.color.getHexString() === paintColor) return;
+    paintStroke.push({ part: p.index, face: null, prev: p.color.clone() });
+    p.color.set(paintColor); applyPartLook(p);
+  } else {
+    if (p.paint.get(h.faceId) === paintColor) return;
+    paintStroke.push({ part: p.index, face: h.faceId, prev: p.paint.get(h.faceId) ?? null });
+    p.paint.set(h.faceId, paintColor); p.paintRev++; applyPartLook(p);
+  }
+}
+function endPaint() {
+  if (!painting) return;
+  painting = false;
+  if (paintStroke.length) { paintUndo.push(paintStroke); storePaint(); if (paintStroke.some(x => x.face === null)) renderParts(); }
+  paintStroke = [];
+}
+function undoPaint() {
+  const st = paintUndo.pop();
+  if (!st) return toast('Nothing to undo.');
+  for (const x of [...st].reverse()) {
+    const p = model.parts[x.part];
+    if (x.face === null) p.color.copy(x.prev);
+    else { if (x.prev) p.paint.set(x.face, x.prev); else p.paint.delete(x.face); p.paintRev++; }
+    applyPartLook(p);
+  }
+  storePaint(); renderParts();
+}
+function pickPaintColor(ev) {
+  const h = faceHit(ev);
+  if (!h) return;
+  const p = model.parts[h.part];
+  const hex = p.paint.get(h.faceId) ?? (p.vtint
+    ? '#' + new THREE.Color().fromArray(p.geo.attributes.color.array, h.vertex * 3).getHexString()
+    : '#' + p.color.getHexString());
+  setPaintColor(hex); toast(`Colour ${hex} picked`);
+}
+function clearPaint() {
+  for (const p of model.parts) { p.paint.clear(); p.paintRev++; p.color.copy(p.defaultColor); applyPartLook(p); }
+  paintUndo = []; storePaint(); renderParts();
+}
+// colour names for the note, so "the purple face" in the request finds #7c5cd6 (the nearest named colour for custom ones)
+const COLOR_NAMES = { '#d9d4cc': 'light grey', '#9a9a9a': 'grey', '#3d3d3d': 'dark grey', '#e0533d': 'red', '#f0a23b': 'orange', '#f2d64b': 'yellow', '#7bc043': 'green', '#2fa39a': 'teal', '#3b82f6': 'blue', '#7c5cd6': 'purple', '#d6469f': 'pink', '#b08968': 'brown', '#ffffff': 'white', '#000000': 'black', '#4682b4': 'steel blue' };
+function colorName(hex) {
+  const c = new THREE.Color(hex);
+  let best = '', bd = Infinity;
+  for (const [h, n] of Object.entries(COLOR_NAMES)) { const k = new THREE.Color(h), d = (k.r - c.r) ** 2 + (k.g - c.g) ** 2 + (k.b - c.b) ** 2; if (d < bd) { bd = d; best = n; } }
+  return best;
+}
+/** Painted faces and repainted parts, for the note to Claude. */
+function paintData() {
+  const out = [];
+  for (const p of model.parts) {
+    if (!ownColor(p)) out.push({ part: p.name, face: null, color: '#' + p.color.getHexString(), name: colorName('#' + p.color.getHexString()), description: 'whole part' });
+    for (const [f, c] of p.paint) {
+      const fa = p.an.faces[f];
+      if (fa) out.push({ part: p.name, face: f, color: c, name: colorName(c), description: describeFace(fa), centroid: fa.centroid.map(r2) });
+    }
+  }
+  return out;
+}
+$('paintSw').innerHTML = SWATCHES.map(c => `<button class="psw" data-c="${c}" style="background:${c}" title="${c}"></button>`).join('');
+document.querySelectorAll('#paintSw .psw').forEach(b => b.onclick = () => { setPaintColor(b.dataset.c); setTool('paint'); });
+$('paintColor').oninput = e => setPaintColor(e.target.value);
+$('paintMode').onchange = () => setTool('paint');
+$('paintClear').onclick = () => { if (confirm('Remove all paint and part colours of this model?')) clearPaint(); };
+$('tPaint').onclick = () => setTool('paint');
+setPaintColor(paintColor);
+
 // ============================================================= parameters
 let params = [], paramEdits = {}, paramBusy = false, liveT = null, paramScript = '', paramT = null;
 let paramFilter = 'all';
@@ -2223,6 +2345,8 @@ function openNote(opts = {}) {
   rows.push(['strokes', strokes.length, `Pen drawing (${strokes.length})`, strokes.length > 0 && only === undefined]);
   rows.push(['features', selection.length, `Selected features (${selection.length})`, selection.length > 0 && only === undefined, selection.map(s => entityInfo(s).title).join(', ')]);
   rows.push(['meas', only !== undefined ? 1 : measurements.length, only !== undefined ? `Dimension ${only}` : `Measurements (${measurements.length})`, only !== undefined || measurements.length > 0, only !== undefined ? measurements.find(m => m.id === only)?.text : measurements.map(m => `${m.id}: ${m.text}`).join(', ')]);
+  const pd = paintData();
+  rows.push(['paint', pd.length, `Painted faces / parts (${pd.length})`, pd.length > 0 && only === undefined, [...new Set(pd.map(x => x.color))].join(' ')]);
   rows.push(['markers', markers.length, `Markers (${markers.length})`, markers.length > 0 && only === undefined, markers.map((m, i) => `${markerLabel(i)}: ${m.note || '(no note)'}`).join(' · ')]);
   rows.push(['section', section.on ? 1 : 0, 'Current section', section.on, section.on ? $('secInfo').textContent : '']);
   $('mInc').innerHTML = rows.filter(r => r[1] > 0).map(r => `<label><input type="checkbox" data-k="${r[0]}" ${r[3] ? 'checked' : ''}><span>${esc(r[2])}${r[4] ? `<div class="d">${esc(r[4])}</div>` : ''}</span></label>`).join('')
@@ -2236,7 +2360,7 @@ async function sendNote() {
   const comment = $('mText').value.trim();
   const inc = k => !!$('mInc').querySelector(`input[data-k="${k}"]`)?.checked;
   const markD = inc('markers') ? markerRows(markers) : [];
-  if (!comment && !markD.some(m => m.note)) { $('mText').focus(); return toast('Write a request or comment.', true); }
+  if (!comment && !markD.some(m => m.note) && !(inc('paint') && paintData().length)) { $('mText').focus(); return toast('Write a request or comment.', true); }
   const strokesD = inc('strokes') ? strokeData() : [];
   const featuresD = inc('features') ? featureData() : [];
   const measD = inc('meas') ? measureData(modalOpts.measurementOnly) : [];
@@ -2248,7 +2372,7 @@ async function sendNote() {
   const camDir = controls.target.clone().sub(camera.position).normalize();
   const payload = {
     model: model.info.path, name: model.info.name, step: model.info.step || null, comment,
-    strokes: strokesD, features: featuresD, measurements: measD, markers: markD,
+    strokes: strokesD, features: featuresD, measurements: measD, markers: markD, paint: inc('paint') ? paintData() : [],
     section: !(inc('section') && section.on) ? null
       : section.mode === 'box' ? { mode: 'box', min: arr(section.box.min), max: arr(section.box.max), info: $('secInfo').textContent }
       : { mode: section.mode, normal: arr(section.plane.normal.clone().multiplyScalar(section.flip ? -1 : 1)), offset: r2(section.d), flip: section.flip, info: $('secInfo').textContent,
@@ -2275,10 +2399,10 @@ function setTool(t) {
   // picks, strokes and measurements are stored in home-pose model coordinates
   if (t !== 'select' && motion.def && !motionAtHome()) { motionHome(); toast('Motion returned to the home pose'); }
   tool = t;
-  for (const [id, name] of [['tSelect', 'select'], ['tPen', 'pen'], ['tMeasure', 'measure'], ['tMark', 'mark']]) $(id).classList.toggle('on', t === name);
-  for (const [id, name] of [['ctxSelect', 'select'], ['ctxPen', 'pen'], ['ctxMeasure', 'measure'], ['ctxMark', 'mark']]) $(id).classList.toggle('on', t === name);
+  for (const [id, name] of [['tSelect', 'select'], ['tPen', 'pen'], ['tMeasure', 'measure'], ['tMark', 'mark'], ['tPaint', 'paint']]) $(id).classList.toggle('on', t === name);
+  for (const [id, name] of [['ctxSelect', 'select'], ['ctxPen', 'pen'], ['ctxMeasure', 'measure'], ['ctxMark', 'mark'], ['ctxPaint', 'paint']]) $(id).classList.toggle('on', t === name);
   lockView();
-  renderer.domElement.style.cursor = t === 'pen' || t === 'mark' ? 'crosshair' : 'default';
+  renderer.domElement.style.cursor = t === 'pen' || t === 'mark' || t === 'paint' ? 'crosshair' : 'default';
   if (markDraft) { markDraft = null; drawMarkers(); }
   for (const mp of measPicks) dropObj(mp.obj);
   measPicks = []; clearMeasTemp();
@@ -2292,6 +2416,7 @@ function hint() {
       : 'Left = draw over the view · middle = rotate · right = pan · wheel = zoom (locked once you draw)',
     mark: markDraft ? (markDraft.type === 'area' ? `Click more points · click the first point or Enter = close the area (${markDraft.pts.length} so far) · Esc = cancel` : 'Click point B · Esc = cancel')
       : 'Click the model = new marker (type in Options) · click a label = edit · drag = move · Delete = remove',
+    paint: 'Click or drag over faces to paint (Face / Part in Options) · Alt+click = pick a colour · Ctrl+Z = undo · middle = rotate',
     measure: measPicks.length ? ($('measMode').value === 'min' ? 'Click the second part · Esc = cancel' : $('measMode').value === 'pp' ? 'Click the second point (snaps to edge middles and circle centres) · Esc = cancel' : 'Pick the second feature · Esc = cancel') : ({ auto: 'Click a hole (Ø) or the first of two features', pp: 'Click the first point (snaps to vertices/edges)', angle: 'Click the first plane or edge', dia: 'Click a hole, pin or circular edge', one: 'Click a face (area), edge (length) or vertex (coordinates)', min: 'Click the first part' })[$('measMode').value],
   }[tool];
   $('hint').textContent = h + (strokes.length && tool !== 'pen' ? ' · view locked by the drawing: send the note or clear it 🗑' : '');
@@ -2333,6 +2458,12 @@ cvs.addEventListener('pointerdown', ev => {
   downAt = { x: ev.clientX, y: ev.clientY };
   cubeDown = cubeDir(ev);
   if (cubeDown) return;
+  if (tool === 'paint') {
+    if (ev.altKey) { pickPaintColor(ev); return; }
+    painting = true; paintStroke = []; paintAt(ev);
+    try { cvs.setPointerCapture(ev.pointerId); } catch { /* synthetic pointer */ }
+    return;
+  }
   if (tool === 'pen') {
     active = { color: penColor, screen: [], hits: [], misses: [] };
     penPoint(active, ev);
@@ -2343,6 +2474,7 @@ cvs.addEventListener('pointerdown', ev => {
 let moveRaf = 0, lastMove = null;
 cvs.addEventListener('pointermove', ev => {
   lastPointer = ev;
+  if (painting) { if (ev.buttons & 1) paintAt(ev); else endPaint(); return; }
   if (active) {
     const px = eventPx(ev), last = active.screen[active.screen.length - 1];
     if (Math.hypot(px.x - last[0], px.y - last[1]) < 3) return;
@@ -2358,7 +2490,7 @@ cvs.addEventListener('pointermove', ev => {
     const cd = cubeDir(e);
     cubeHl.visible = !!cd;
     if (cd) { cubeHl.position.set(...cd).multiplyScalar(0.5); cvs.style.cursor = 'pointer'; setHover(null); $('hover').textContent = 'View cube: click a face, edge or corner'; return; }
-    cvs.style.cursor = tool === 'pen' || tool === 'mark' ? 'crosshair' : 'default';
+    cvs.style.cursor = tool === 'pen' || tool === 'mark' || tool === 'paint' ? 'crosshair' : 'default';
     const filter = tool === 'select' ? $('selFilter').value : 'auto';
     const pk = (tool === 'select' || tool === 'measure' || tool === 'mark') ? pickAt(e, filter) : null;
     setHover(pk);
@@ -2371,6 +2503,7 @@ cvs.addEventListener('pointermove', ev => {
 });
 const endStroke = () => { active = null; };
 cvs.addEventListener('pointerup', ev => {
+  if (painting) { endPaint(); return; }
   // keep the pivot for the controls' last update (next frame), then drop it so view animations are not corrected
   if (ev.button === 1) {
     const p = pivot; requestAnimationFrame(() => { if (pivot === p) pivot = null; });
@@ -2392,7 +2525,7 @@ cvs.addEventListener('pointerup', ev => {
     measureClick(pickAt(ev, $('measMode').value === 'min' ? 'part' : 'auto'), ev.shiftKey, ev);
   } else if (tool === 'mark') markClick(ev);
 });
-cvs.addEventListener('pointercancel', () => { endStroke(); pivot = null; });
+cvs.addEventListener('pointercancel', () => { endStroke(); endPaint(); pivot = null; });
 cvs.addEventListener('pointerleave', () => { lastPointer = null; cubeHl.visible = false; setHover(null); clearMeasPrev(); $('hover').textContent = ''; });
 // right click (no drag, since right-drag pans) on a part: hide, isolate, transparency, look at the face
 cvs.addEventListener('contextmenu', ev => {
@@ -2606,7 +2739,7 @@ document.querySelectorAll('#partsGroup button').forEach(b => b.onclick = () => {
 $('partsExpand').onclick = () => { for (const p of model.parts) partOpen.add(p.name); renderParts(); };
 $('partsCollapse').onclick = () => { partOpen.clear(); renderParts(); };
 $('partsShowAll').onclick = () => { isolated = null; setPartsVisible(() => true); };
-$('partsReset').onclick = () => { for (const p of model.parts) { p.color.copy(p.defaultColor); p.transp = false; applyPartLook(p); } renderParts(); };
+$('partsReset').onclick = () => { for (const p of model.parts) { p.color.copy(p.defaultColor); p.paint.clear(); p.paintRev++; p.transp = false; applyPartLook(p); } paintUndo = []; storePaint(); renderParts(); };
 $('partsAlpha').oninput = e => { display.alpha = 1 - e.target.value / 100; $('partsAlphaV').textContent = `${e.target.value} %`; for (const p of model.parts) applyPartLook(p); };
 
 // --- measurement
@@ -2696,7 +2829,7 @@ addEventListener('keydown', e => {
   // Shift alone over a part: find it in the parts tree (Shift+click still adds to the selection)
   if (e.key === 'Shift') { if (!e.repeat) shiftAlone = !e.ctrlKey && !e.altKey && !e.metaKey; return; }
   shiftAlone = false;
-  if (e.ctrlKey || e.metaKey || e.altKey) { if (k === 'z' && !e.altKey) { undoStroke(); e.preventDefault(); } return; }
+  if (e.ctrlKey || e.metaKey || e.altKey) { if (k === 'z' && !e.altKey) { if (tool === 'paint') undoPaint(); else undoStroke(); e.preventDefault(); } return; }
   if (k === 'escape') { closeMenus(); if (measPicks.length) setTool('measure'); else if (markDraft || markSel >= 0) { markDraft = null; markSel = -1; markEdit = false; drawMarkers(); hint(); } else { clearSelection(); $('pinpop').style.display = 'none'; clearNoteOverlay(); activePin = null; renderPins(); } }
   else if (k === 'h' && e.shiftKey) { isolated = null; setPartsVisible(() => true); }
   else if (k === 'h') hideParts(targetParts());
@@ -2709,6 +2842,7 @@ addEventListener('keydown', e => {
   else if (k === 'd') setTool('pen');
   else if (k === 'm') setTool('measure');
   else if (k === 'k') setTool('mark');
+  else if (k === 'b') setTool('paint');
   else if ((k === 'delete' || k === 'backspace') && markSel >= 0) deleteMarker(markSel);
   else if ((k === 'delete' || k === 'backspace') && measSel !== null) removeMeasurement(measSel);
   else if (k === 'f') $('bFit').click();

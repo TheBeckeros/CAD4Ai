@@ -19,6 +19,7 @@ Then they write a request. A `Note N:` block is appended to their chat message. 
 | `Note ID:` | used to mark the note as done |
 | `Selected features` | **exact** features from the STEP (type, size, axis, clicked point); the number matches the circle on the screenshot |
 | `Markers` | places clicked with the Markers tool: point, line A → B or area, the feature under each (`on:`) and a note each; the letter matches the screenshot |
+| `Painted in the viewer` | faces (or whole parts) the user coloured with the Paint tool: part, face number, face description and centre; the request says what each colour means ("red faces: chamfer 1 mm"). Find each face with `locate.py --points "<centre>"` |
 | `Dimensions` | measured values and what they were measured between. "Dimension N … should be X" means change that size to X |
 | `Section` | the section plane the user was looking at |
 | `Pen drawing` | free-hand strokes drawn over the view (an 8-point outline in mm; all points are in the annotation data). Points on the model are exact; a stroke drawn next to the model lies on the plane through the view centre |

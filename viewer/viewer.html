@@ -60,6 +60,9 @@ kbd{font:11px ui-monospace,Consolas,monospace;background:var(--bg2);border:1px s
 .ctx{display:none;align-items:center;gap:4px}.ctx.on{display:flex}
 .sw{width:18px;height:18px;border-radius:50%;padding:0;border:2px solid transparent;min-width:0}
 .sw.on{border-color:var(--text)}
+#paintSw{display:inline-flex;gap:3px;flex-wrap:wrap;max-width:230px}
+.psw{width:16px;height:16px;border-radius:4px;padding:0;min-width:0;border:1px solid rgba(255,255,255,.18)}
+.psw.on{box-shadow:0 0 0 2px var(--panel),0 0 0 3.5px var(--text)}
 .dd{position:relative}
 .menu{position:absolute;top:calc(100% + 6px);left:0;z-index:40;display:none;min-width:220px;background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:8px;box-shadow:0 12px 32px rgba(0,0,0,.5)}
 .menu.open{display:block}
@@ -246,6 +249,7 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
       <button id="tMeasure" title="Measure (M)"><svg viewBox="0 0 16 16"><path d="M1.5 10.5l9-9 4 4-9 9z"/><path d="M5 7l1.5 1.5M7 5l1.5 1.5M9 3l1.5 1.5"/></svg><span class="lab">Measure</span></button>
       <button id="tPen" title="Draw over the view (D)"><svg viewBox="0 0 16 16"><path d="M2 14l1-4 8-8 3 3-8 8z"/><path d="M9.5 3.5l3 3"/></svg><span class="lab">Draw</span></button>
       <button id="tMark" title="Markers with a note: point, line A–B, area (K)"><svg viewBox="0 0 16 16"><path d="M8 14.5s-4.5-4.6-4.5-8a4.5 4.5 0 0 1 9 0c0 3.4-4.5 8-4.5 8z"/><circle cx="8" cy="6.5" r="1.6"/></svg><span class="lab">Markers</span></button>
+      <button id="tPaint" title="Paint faces or whole parts (B) · Alt+click picks a colour"><svg viewBox="0 0 16 16"><path d="M9.5 2.5l4 4-5.5 5.5-4-4z"/><path d="M4 8l-1.6 1.6c-.8.8-.8 2 0 2.8l1.2 1.2c.8.8 2 .8 2.8 0L8 12"/><path d="M11.5 4.5l1.5-1.5"/></svg><span class="lab">Paint</span></button>
     </div></div>
     <div class="grp" id="ctxGrp"><span class="cap">Options</span><div class="tb">
       <span class="ctx" id="ctxSelect"><select id="selFilter" title="What to select">
@@ -261,6 +265,9 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
         <button class="sw" data-c="#32d2ff" style="background:#32d2ff" title="Blue"></button>
         <button class="sw" data-c="#ffffff" style="background:#ffffff" title="White"></button>
       </span>
+      <span class="ctx" id="ctxPaint"><span id="paintSw"></span><input type="color" id="paintColor" title="Custom colour">
+        <select id="paintMode" title="What a click paints"><option value="face">Face</option><option value="part">Part</option></select>
+        <button id="paintClear" class="ghost" title="Remove all paint and part colours">Clear</button></span>
       <span class="ctx" id="ctxMark"><select id="markType" title="Marker type">
         <option value="point">Point</option><option value="line">Line A–B</option><option value="area">Area</option>
       </select></span>
@@ -525,6 +532,7 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
       <kbd>M</kbd><span>Measure · middle click deletes all dimensions</span>
       <kbd>Shift</kbd><span>Press and release over a part: find it in the parts tree</span>
       <kbd>D</kbd><span>Draw over the view</span>
+      <kbd>B</kbd><span>Paint faces or parts · Alt+click picks a colour · Ctrl+Z undo</span>
       <kbd>K</kbd><span>Markers: click = point / line / area with a note · Delete = remove the selected one</span>
       <kbd>Enter</kbd><span>Note for Claude</span>
       <kbd>H</kbd><span>Hide the part under the cursor (or the selected parts)</span>
