@@ -157,7 +157,15 @@ h4:first-child{margin-top:4px}
 /* parts tree: long names scroll sideways instead of being cut; the icons stay pinned on the right */
 /* every row as wide as the longest name (--rowW, set by renderParts), so the rows scroll together */
 #partList{overflow-x:auto;padding-bottom:2px}
-#partList .item{min-width:var(--rowW,auto)}
+/* groups: sub-assemblies or part types, folding; the tree gets the width of its widest row (fitPartRows) */
+#partList .pgkids{display:none;padding-left:12px;border-left:1px solid var(--line);margin-left:9px}
+#partList .pgrp.open>.pgkids{display:block}
+#partList .ghead{background:transparent;border-color:transparent;padding-left:4px;margin:3px 0}
+#partList .ghead .t{font-weight:600;color:var(--dim)}
+#partList .gcar{display:inline-block;color:var(--faint);transition:transform .12s}
+#partList .pgrp.open>.ghead .gcar{transform:rotate(90deg)}
+#partList .ghead .icons{background:var(--panel);box-shadow:-8px 0 8px -4px var(--panel)}
+#partList .badge{margin-right:4px}
 #partList .item .t.tog{overflow:visible;text-overflow:clip;flex:1 0 auto}
 #partList .prow .icons{display:flex;align-items:center;gap:2px;position:sticky;right:10px;background:var(--bg2);padding-left:4px;box-shadow:-8px 0 8px -4px var(--bg2)}
 #partList .item.flash{animation:pflash 1.4s ease-out}
@@ -308,7 +316,8 @@ textarea:focus,select:focus,input:focus{outline:2px solid var(--accent);outline-
         <div id="tab-parts">
           <div class="row"><button id="partsShowAll" class="ghost">Show all</button><button id="partsReset" class="ghost">Default colours</button></div>
           <div class="alpha"><label for="partsAlpha">Transparency</label><input type="range" id="partsAlpha" min="0" max="90" step="1" value="60" class="grow" style="width:auto;flex:1"><span id="partsAlphaV" class="mono">60 %</span></div>
-          <div class="row"><input type="text" id="partsFilter" placeholder="Filter parts…" style="width:auto;flex:1;min-width:0"><button id="partsExpand" class="ghost icon" title="Expand all part properties">⊞</button><button id="partsCollapse" class="ghost icon" title="Collapse all part properties">⊟</button></div>
+          <div class="row" id="partsGroupRow"><span class="muted">Group by</span><span class="seg" id="partsGroup"><button data-m="asm" title="Sub-assemblies from the STEP file or parts.json">Assembly</button><button data-m="type" title="Part type: custom parts, fasteners, bearings…">Type</button><button data-m="flat" title="One flat list">Flat</button></span></div>
+          <div class="row"><input type="text" id="partsFilter" placeholder="Filter parts, types, groups…" style="width:auto;flex:1;min-width:0"><button id="partsExpand" class="ghost icon" title="Expand all part properties">⊞</button><button id="partsCollapse" class="ghost icon" title="Collapse all part properties">⊟</button></div>
           <div class="d muted">Right-click a part in the view, or hover it and press <kbd>H</kbd> hide · <kbd>T</kbd> transparent · <kbd>I</kbd> isolate.</div>
           <div id="partList"></div>
           <h4>Exploded view</h4>

@@ -170,14 +170,25 @@ async function parseStep(arrayBuf) {
   const o = await occt();
   const res = o.ReadStepFile(buf, { linearUnit: 'millimeter', linearDeflectionType: 'bounding_box_ratio', linearDeflection: 0.0015, angularDeflection: 0.3 });
   if (!res || !res.success || !res.meshes.length) throw new Error('Could not load the STEP file');
-  const names = new Map();
-  (function walk(node, prefix) {
+  // names and the assembly chain above every mesh (["testasm", "podsestava_vika"] for the lid in a sub-assembly)
+  const names = new Map(), chains = new Map();
+  (function walk(node, prefix, chain) {
     const nm = node.name || prefix;
-    for (const mi of node.meshes || []) names.set(mi, nm);
-    for (const ch of node.children || []) walk(ch, ch.name || nm);
-  })(res.root, '');
+    const here = node.name ? [...chain, node.name] : chain;
+    for (const mi of node.meshes || []) { names.set(mi, nm); chains.set(mi, here); }
+    for (const ch of node.children || []) walk(ch, ch.name || nm, here);
+  })(res.root, '', []);
+  const partName = (m, i) => m.name || names.get(i) || `Part ${i + 1}`;
+  const paths = res.meshes.map((m, i) => {
+    const c = [...(chains.get(i) || [])];
+    if (c[c.length - 1] === partName(m, i)) c.pop();   // the part's own node is not a group
+    return c;
+  });
+  // the top assembly every part sits in is no group either: drop the prefix all parts share
+  while (paths.length > 1 && paths.every(p => p.length && p[0] === paths[0][0])) paths.forEach(p => p.shift());
+  if (paths.length === 1) paths[0] = [];
   return res.meshes.map((m, i) => ({
-    name: m.name || names.get(i) || `Part ${i + 1}`,
+    name: partName(m, i), path: paths[i],
     positions: Float32Array.from(m.attributes.position.array),
     normals: m.attributes.normal ? Float32Array.from(m.attributes.normal.array) : null,
     index: Uint32Array.from(m.index.array),
@@ -247,7 +258,7 @@ function buildPart(src, i, count) {
   pose.add(group);
   const bb = geo.boundingBox;
   return {
-    index: i, name: src.name, an, geo, bvhGeo, mesh, cap, edgesObj, group, pose, mat, mats, alert: false, baseCol, faceTint: !!baseCol,
+    index: i, name: src.name, path: src.path || [], an, geo, bvhGeo, mesh, cap, edgesObj, group, pose, mat, mats, alert: false, baseCol, faceTint: !!baseCol,
     // per-part display: '' follows the Display menu; a mesh without B-rep faces (STL, scan) with
     // thousands of estimated edges would be a black tangle, so it starts shaded without edges
     mode: !src.faceRanges && an.edges.length > 1500 ? 'shaded' : '',
@@ -313,7 +324,7 @@ async function loadModel(info, keepCamera) {
   $('title').innerHTML = `<b>${esc(info.name)}</b><div class="d">${fmtn(size.x)} × ${fmtn(size.y)} × ${fmtn(size.z)} mm · volume ${fmtn(vol, 1)} mm³${model.parts.length > 1 ? ` · ${model.parts.length} parts` : ''}</div>`;
   $('src').textContent = source;
   $('loading').classList.remove('on');
-  renderParts(); renderSelection(); loadParams(); loadVersions(); loadNotes(true); loadMotion(); loadVariants(); loadExplode(); loadMarkers();
+  renderParts(); renderSelection(); loadParams(); loadVersions(); loadNotes(true); loadMotion(); loadVariants(); loadExplode(); loadMarkers(); loadPartsMeta();
   if (ghost.id) loadGhost(ghost.id);
   renderSavedViews();
   if (anaState.kind === 'collide') runCollisions(); else if (anaState.kind) runAnalysis();
@@ -334,9 +345,9 @@ async function poll() {
         model.info = info;
         toast('Could not load the model: ' + err.message, true);
       }
-    } else if (cur && info.path === cur.path && (info.motionMtimeMs !== cur.motionMtimeMs || info.explodeMtimeMs !== cur.explodeMtimeMs)) {
-      const m = info.motionMtimeMs !== cur.motionMtimeMs;
-      model.info = info; if (m) loadMotion(); else loadExplode();
+    } else if (cur && info.path === cur.path && (info.motionMtimeMs !== cur.motionMtimeMs || info.explodeMtimeMs !== cur.explodeMtimeMs || info.partsMtimeMs !== cur.partsMtimeMs)) {
+      const m = info.motionMtimeMs !== cur.motionMtimeMs, x = info.explodeMtimeMs !== cur.explodeMtimeMs, pm = info.partsMtimeMs !== cur.partsMtimeMs;
+      model.info = info; if (m) loadMotion(); if (x) loadExplode(); if (pm) loadPartsMeta();
     }
   } catch (e) { /* server is restarting */ }
   setTimeout(poll, 1200);
@@ -1312,37 +1323,115 @@ function showColorMenu(p, anchor) {
 // Part properties fold away (by part name, so they survive reloads); one part starts open
 const partOpen = new Set();
 let partOpenModel = null;
-/** All tree rows as wide as the widest one (long names scroll sideways together); measured while the panel is shown. */
+/** The tree as wide as its widest row (long names scroll sideways together); measured while the panel is shown. */
 function fitPartRows() {
-  const el = $('partList');
-  el.style.removeProperty('--rowW');
-  const rows = [...el.querySelectorAll('.prow')];
-  const w = Math.max(0, ...rows.map(r => r.scrollWidth)) + 20;   // + the row's padding and border
-  if (rows.length && w > el.clientWidth) el.style.setProperty('--rowW', `${w}px`);
+  const el = $('partList'), tree = el.querySelector('.ptree');
+  if (!tree) return;
+  tree.style.removeProperty('min-width');
+  const L = tree.getBoundingClientRect().left;
+  const rows = [...tree.querySelectorAll('.prow')].filter(r => r.offsetParent);
+  const w = Math.max(0, ...rows.map(r => r.getBoundingClientRect().left - L + r.scrollWidth)) + 12;   // + the row's padding and border
+  if (rows.length && w > el.clientWidth) tree.style.minWidth = `${w}px`;
 }
 new ResizeObserver(() => fitPartRows()).observe($('pside'));
-function renderParts() {
-  const el = $('partList');
-  if (partOpenModel !== model.info?.path) { partOpenModel = model.info?.path; partOpen.clear(); if (model.parts.length === 1) partOpen.add(model.parts[0].name); }
-  const q = $('partsFilter').value.trim().toLowerCase();
-  el.innerHTML = model.parts.map(p => {
-    const s = p.bbox.getSize(new THREE.Vector3());
-    return `<div class="item ${partOpen.has(p.name) ? 'open' : ''}" data-i="${p.index}" ${q && !p.name.toLowerCase().includes(q) ? 'hidden' : ''}><div class="prow">
+// ---- part attributes: <model>.parts.json written by Claude, otherwise guessed from the name
+// {"parts": {"<part name>": {"type": "fastener", "group": "…", "subassembly": "…", "standard": "ISO 4017 M5x16", "material": "…"}}}
+const PART_TYPES = { custom: 'Custom parts', fastener: 'Fasteners', bearing: 'Bearings', seal: 'Seals', spring: 'Springs', purchased: 'Purchased parts', electrical: 'Electrical', other: 'Other' };
+const TYPE_GUESS = [
+  ['fastener', /(screw|bolt|nut\b|washer|rivet|dowel|circlip|šroub|sroub|matice|matka|podlo[žz]k|nýt|nyt|kol[ií]k|pojistn|\b(iso|din|en|čsn|csn)[ _-]?\d{3,5}|\bm\d{1,2}([x×]\d+)?\b)/i],
+  ['bearing', /(bearing|lo[žz]isk|\b6[0-4]\d{2}(-?2?rs|-?2?z)?\b)/i],
+  ['seal', /(o-?ring|seal|t[ěe]sn|gufer)/i],
+  ['spring', /(spring|pru[žz]in)/i],
+];
+let partsMeta = {};   // name -> attributes from parts.json
+async function loadPartsMeta() {
+  partsMeta = {};
+  if (model.info?.parts) { try { partsMeta = (await api('/api/parts')).parts || {}; } catch (e) { toast('parts.json: ' + e.message, true); } }
+  renderParts();
+}
+function partInfo(p) {
+  const m = partsMeta[p.name] || {};
+  const guess = TYPE_GUESS.find(([, re]) => re.test(p.name))?.[0];
+  const type = PART_TYPES[m.type] ? m.type : (m.type ? 'other' : guess || 'custom');
+  const sub = m.subassembly ? String(m.subassembly).split('/').map(x => x.trim()).filter(Boolean) : p.path;
+  return { type, guessed: !m.type && !!guess, group: m.group || PART_TYPES[type], sub, meta: m };
+}
+const partGrpClosed = new Set();
+let partGroupMode = (() => { try { return localStorage.getItem('cadp.partsGroup') || 'auto'; } catch { return 'auto'; } })();
+function groupMode() {
+  if (partGroupMode !== 'auto') return partGroupMode;
+  if (model.parts.some(p => partInfo(p).sub.length)) return 'asm';
+  return model.parts.some(p => partInfo(p).type !== 'custom') ? 'type' : 'flat';
+}
+function partRowHtml(p, q) {
+  const s = p.bbox.getSize(new THREE.Vector3()), inf = partInfo(p);
+  const extra = [inf.meta.standard, inf.meta.material].filter(Boolean).map(esc).join(' · ');
+  return `<div class="item ${partOpen.has(p.name) ? 'open' : ''}" data-i="${p.index}" ${q && !partMatches(p, q) ? 'hidden' : ''}><div class="prow">
       <span class="t grow tog" data-a="tog" title="${esc(p.name)}">${esc(p.name)}</span>
       <span class="icons"><button class="car" data-a="tog" title="Details">▸</button>
       <button class="pico ${p.visible ? '' : 'off'}" data-a="vis" title="${p.visible ? 'Hide' : 'Show'}">${p.visible ? PI.eye : PI.eyeOff}</button>
       <button class="pico" data-a="disp" title="Display style: ${PI.dispLabel[p.mode || '']}">${PI.disp(p.mode)}</button>
       <button class="pico" data-a="col" title="Colour"><span class="swc" style="background:#${p.color.getHexString()}"></span></button>
       <button class="pico ${p.transp ? 'act' : ''}" data-a="tr" title="Transparent: ${p.transp ? 'yes' : 'no'}">${PI.trans(p.transp)}</button></span></div>
-      <div class="props"><div class="d">${fmtn(s.x)} × ${fmtn(s.y)} × ${fmtn(s.z)} mm · ${fmtn(p.an.volume, 1)} mm³ · ${p.an.faces.length} faces, ${p.an.edges.length} edges</div></div></div>`;
-  }).join('');
-  el.querySelectorAll('.item').forEach(it => {
+      <div class="props"><div class="d"><span class="badge">${esc(PART_TYPES[inf.type])}${inf.guessed ? ' ?' : ''}</span>${extra ? ` ${extra}` : ''}<br>${fmtn(s.x)} × ${fmtn(s.y)} × ${fmtn(s.z)} mm · ${fmtn(p.an.volume, 1)} mm³ · ${p.an.faces.length} faces, ${p.an.edges.length} edges</div></div></div>`;
+}
+function partMatches(p, q) {
+  const inf = partInfo(p);
+  return [p.name, inf.group, PART_TYPES[inf.type], ...inf.sub, inf.meta.standard, inf.meta.material].some(x => x && String(x).toLowerCase().includes(q));
+}
+/** Groups for the current mode: a tree of {key, label, kids: Map, parts: []}. */
+function partTree(mode) {
+  const root = { key: '', label: '', kids: new Map(), parts: [] };
+  for (const p of model.parts) {
+    const inf = partInfo(p);
+    const chain = mode === 'asm' ? inf.sub : mode === 'type' ? [inf.group] : [];
+    let node = root;
+    for (const name of chain) {
+      const key = `${mode}:${node.key}/${name}`;
+      if (!node.kids.has(name)) node.kids.set(name, { key, label: name, kids: new Map(), parts: [] });
+      node = node.kids.get(name);
+    }
+    node.parts.push(p);
+  }
+  if (mode === 'type') root.kids = new Map([...root.kids].sort((a, b) => (a[1].parts[0] && partInfo(a[1].parts[0]).type === 'custom' ? -1 : 0) - (b[1].parts[0] && partInfo(b[1].parts[0]).type === 'custom' ? -1 : 0)));
+  return root;
+}
+const groupParts = g => [...g.parts, ...[...g.kids.values()].flatMap(groupParts)];
+function groupHtml(g, q) {
+  const all = groupParts(g), shown = q ? all.filter(p => partMatches(p, q)) : all;
+  const vis = all.some(p => p.visible), tr = all.length && all.every(p => p.transp);
+  const open = q || !partGrpClosed.has(g.key);
+  return `<div class="pgrp ${open ? 'open' : ''}" data-g="${esc(g.key)}" ${shown.length ? '' : 'hidden'}>
+    <div class="item ghead"><div class="prow">
+      <span class="t grow tog" data-a="gtog" title="${esc(g.label)}"><span class="gcar">▸</span> ${esc(g.label)} <span class="muted">${all.length}</span></span>
+      <span class="icons"><button class="pico ${vis ? '' : 'off'}" data-a="gvis" title="${vis ? 'Hide the group' : 'Show the group'}">${vis ? PI.eye : PI.eyeOff}</button>
+      <button class="pico ${tr ? 'act' : ''}" data-a="gtr" title="Group transparent: ${tr ? 'yes' : 'no'}">${PI.trans(tr)}</button></span></div></div>
+    <div class="pgkids">${[...g.kids.values()].map(k => groupHtml(k, q)).join('')}${g.parts.map(p => partRowHtml(p, q)).join('')}</div></div>`;
+}
+function renderParts() {
+  const el = $('partList');
+  if (partOpenModel !== model.info?.path) { partOpenModel = model.info?.path; partOpen.clear(); if (model.parts.length === 1) partOpen.add(model.parts[0].name); }
+  const q = $('partsFilter').value.trim().toLowerCase();
+  const mode = groupMode();
+  document.querySelectorAll('#partsGroup button').forEach(b => b.classList.toggle('on', b.dataset.m === mode));
+  $('partsGroupRow').style.display = model.parts.length > 1 ? '' : 'none';
+  const tree = partTree(mode);
+  el.innerHTML = `<div class="ptree">${[...tree.kids.values()].map(g => groupHtml(g, q)).join('')}${tree.parts.map(p => partRowHtml(p, q)).join('')}</div>`;
+  el.querySelectorAll('.item[data-i]').forEach(it => {
     const p = model.parts[+it.dataset.i];
     it.querySelector('[data-a=vis]').onclick = () => { p.visible = !p.visible; applyPartLook(p); updateSection(); renderParts(); };
     it.querySelector('[data-a=disp]').onclick = e => showDispMenu(p, e.currentTarget);
     it.querySelector('[data-a=col]').onclick = e => showColorMenu(p, e.currentTarget);
     it.querySelector('[data-a=tr]').onclick = () => { p.transp = !p.transp; applyPartLook(p); renderParts(); };
     it.querySelectorAll('[data-a=tog]').forEach(t => t.onclick = () => { if (it.classList.toggle('open')) partOpen.add(p.name); else partOpen.delete(p.name); });
+  });
+  const groups = new Map();
+  (function index(g) { for (const k of g.kids.values()) { groups.set(k.key, k); index(k); } })(tree);
+  el.querySelectorAll('.pgrp').forEach(gEl => {
+    const g = groups.get(gEl.dataset.g), parts = groupParts(g), head = gEl.querySelector(':scope > .ghead');
+    head.querySelector('[data-a=gtog]').onclick = () => { if (partGrpClosed.has(g.key)) partGrpClosed.delete(g.key); else partGrpClosed.add(g.key); gEl.classList.toggle('open'); fitPartRows(); };
+    head.querySelector('[data-a=gvis]').onclick = () => { const v = !parts.some(p => p.visible); for (const p of parts) { p.visible = v; applyPartLook(p); } updateSection(); renderParts(); };
+    head.querySelector('[data-a=gtr]').onclick = () => { const t = !parts.every(p => p.transp); for (const p of parts) { p.transp = t; applyPartLook(p); } renderParts(); };
   });
   fitPartRows();
   const size = model.bbox ? model.bbox.getSize(new THREE.Vector3()) : null;
@@ -2136,6 +2225,8 @@ function revealPartUnderCursor() {
   if ($('partsFilter').value) { $('partsFilter').value = ''; renderParts(); }
   const it = document.querySelector(`#partList .item[data-i="${h.part}"]`);
   if (!it) return;
+  for (let g = it.closest('.pgrp'); g; g = g.parentElement.closest('.pgrp')) { if (!g.classList.contains('open')) { g.classList.add('open'); partGrpClosed.delete(g.dataset.g); } }
+  fitPartRows();
   it.scrollIntoView({ block: 'center', inline: 'start', behavior: 'smooth' });
   it.classList.remove('flash'); void it.offsetWidth; it.classList.add('flash');
 }
@@ -2291,6 +2382,10 @@ $('selSection').onclick = () => {
 // --- parts
 $('explode').oninput = e => { explode = +e.target.value; $('explodeV').textContent = Math.round(explode / 1.5 * 100) + ' %'; applyExplode(); };
 $('partsFilter').oninput = renderParts;
+document.querySelectorAll('#partsGroup button').forEach(b => b.onclick = () => {
+  partGroupMode = b.dataset.m; try { localStorage.setItem('cadp.partsGroup', partGroupMode); } catch { /* per-viewer convenience */ }
+  renderParts();
+});
 $('partsExpand').onclick = () => { for (const p of model.parts) partOpen.add(p.name); renderParts(); };
 $('partsCollapse').onclick = () => { partOpen.clear(); renderParts(); };
 $('partsShowAll').onclick = () => { isolated = null; setPartsVisible(() => true); };

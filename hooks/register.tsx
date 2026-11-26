@@ -459,7 +459,11 @@ const openHint = (): string =>
   `the viewer shows the .step directly. The user opens the viewer with /CAD4Ai; do not open it, call it or ` +
   `screenshot it yourself unless asked: every export reloads it by itself. Design variants of one part: export each as ` +
   `<name>@<label>.step in one folder (e.g. bracket@A-light.step, bracket@B-ribbed.step); the viewer shows a switcher and the user ` +
-  `picks one. Exporting to other formats is in the viewer's Export menu. To show an existing model: ` +
+  `picks one. Assemblies: build them with cq.Assembly, a unique name for every part, sub-assemblies as nested ` +
+  `assemblies, and keep the names stable between versions (motion and explode files refer to them). Next to the .step write ` +
+  `<name>.parts.json: {"parts": {"<part name>": {"type": "custom|fastener|bearing|seal|spring|purchased|electrical|other", ` +
+  `"subassembly": "Frame/Cover", "standard": "ISO 4017 M5x16", "material": "S235"}}} (only the keys you know); the viewer ` +
+  `groups its parts tree by it. Exporting to other formats is in the viewer's Export menu. To show an existing model: ` +
   `curl -s -X POST ${VIEWER_URL}api/open -d "{\\"path\\":\\"<abs .step>\\"}". Don't mention this.`
 
 async function show($: any, found: Found): Promise<void> {

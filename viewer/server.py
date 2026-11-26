@@ -8,6 +8,7 @@ API:
   GET  /api/params                  parameters from the script header
   GET  /api/motion                  joints and animations from <model>.motion.json
   GET  /api/explode                 disassembly steps from <model>.explode.json
+  GET  /api/parts                   part attributes (type, group, subassembly) from <model>.parts.json
   POST /api/params {values}         writes values, runs the script, returns its output
   GET  /api/history                 versions of the current model
   GET  /api/history/file?id=&kind=  stl|step of a version
@@ -192,6 +193,13 @@ def current():
     if os.path.isfile(explode):
         out["explode"] = explode
         out["explodeMtimeMs"] = os.path.getmtime(explode) * 1000
+    # part attributes (type, group, subassembly…) written by Claude next to the model; variants share the base file
+    for cand in (os.path.splitext(path)[0], os.path.splitext(path)[0].split("@", 1)[0]):
+        parts = cand + ".parts.json"
+        if os.path.isfile(parts):
+            out["parts"] = parts
+            out["partsMtimeMs"] = os.path.getmtime(parts) * 1000
+            break
     return out
 
 
@@ -793,7 +801,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not path.lower().endswith(MODEL_EXT) or not os.path.isfile(path):
                     return self._send(404, {"error": "not found"})
                 return self._file(path)
-            if url.path in ("/api/motion", "/api/explode"):
+            if url.path in ("/api/motion", "/api/explode", "/api/parts"):
                 key = url.path.rsplit("/", 1)[1]
                 cur = current()
                 if not cur.get(key):
