@@ -63,6 +63,7 @@ import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+sys.dont_write_bytecode = True   # no __pycache__ inside the app folder
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import assist  # noqa: E402
 
@@ -211,9 +212,64 @@ def current():
     return out
 
 
+def history_key(model_path):
+    return hashlib.sha1(os.path.normcase(os.path.abspath(model_path)).encode()).hexdigest()[:12]
+
+
 def history_dir(model_path):
-    key = hashlib.sha1(os.path.normcase(os.path.abspath(model_path)).encode()).hexdigest()[:12]
-    return os.path.join(data_dir(), "history", key)
+    """Versions of a model, one place for the whole app (~/.CAD4Ai/history/<key>), whatever session shows it.
+    Earlier they were kept per Claude session (<cwd>/.CAD4Ai/s-xxx/history) and copied again in every session."""
+    return os.path.join(assist.APP_HOME, "history", history_key(model_path))
+
+
+def prune_history(hdir, keep=None):
+    """Keep the newest `keep` versions of a model (setting history.keep); older ones are deleted."""
+    keep = keep or assist.load_settings()["history.keep"]
+    try:
+        entries = sorted(e for e in os.listdir(hdir) if os.path.isdir(os.path.join(hdir, e)))
+    except OSError:
+        return 0
+    old = entries[:-keep] if keep > 0 and len(entries) > keep else []
+    for e in old:
+        shutil.rmtree(os.path.join(hdir, e), ignore_errors=True)
+    return len(old)
+
+
+def housekeep(data):
+    """Move version histories left in session folders (<cwd>/.CAD4Ai/s-*/history) to the app history,
+    trim every model's history and drop session folders older than 30 days that hold nothing but a token
+    and an old pointer. Runs in the background."""
+    def run():
+        try:
+            parent = os.path.dirname(os.path.abspath(data))
+            dest_root = os.path.join(assist.APP_HOME, "history")
+            for sd in os.listdir(parent) if os.path.isdir(parent) else []:
+                old = os.path.join(parent, sd, "history")
+                if not (sd.startswith("s-") and os.path.isdir(old)):
+                    continue
+                for key in os.listdir(old):
+                    src = os.path.join(old, key)
+                    for vid in os.listdir(src) if os.path.isdir(src) else []:
+                        dst = os.path.join(dest_root, key, vid)
+                        if not os.path.exists(dst):
+                            os.makedirs(os.path.dirname(dst), exist_ok=True)
+                            shutil.move(os.path.join(src, vid), dst)
+                    shutil.rmtree(src, ignore_errors=True)
+                shutil.rmtree(old, ignore_errors=True)
+            if os.path.isdir(dest_root):
+                for key in os.listdir(dest_root):
+                    prune_history(os.path.join(dest_root, key))
+            cutoff = time.time() - 30 * 86400
+            for sd in os.listdir(parent) if os.path.isdir(parent) else []:
+                d = os.path.join(parent, sd)
+                if not sd.startswith("s-") or os.path.abspath(d) == os.path.abspath(data) or os.path.getmtime(d) > cutoff:
+                    continue
+                left = [n for n in os.listdir(d) if n not in ("lan-token", "latest.json")]
+                if all(os.path.isdir(os.path.join(d, n)) and not os.listdir(os.path.join(d, n)) for n in left):
+                    shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+    threading.Thread(target=run, daemon=True).start()
 
 
 def snapshot_if_changed(cur):
@@ -245,6 +301,7 @@ def snapshot_if_changed(cur):
                 params = []
         label = STATE.pop("pending_label", None) if STATE.get("pending_label") else None
         STATE["pending_label"] = None
+        prune_history(hdir)
         write_json(os.path.join(vdir, "meta.json"), {
             "id": vid, "time": time.time(), "label": label or "export",
             "mtimeMs": cur["mtimeMs"], "size": cur["size"], "params": params,
@@ -386,9 +443,11 @@ COLOR_CACHE = {}
 def step_colors(path):
     """Part colours read with OCCT XCAF (instance and per-solid colours the browser loader misses)."""
     key = (os.path.abspath(path), os.path.getmtime(path))
+    if key not in COLOR_CACHE and len(COLOR_CACHE) >= 16:
+        COLOR_CACHE.pop(next(iter(COLOR_CACHE)))
     if key not in COLOR_CACHE:
         try:
-            r = subprocess.run([sys.executable, os.path.join(HERE, "stepcolors.py"), path],
+            r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "stepcolors.py"), path],
                                capture_output=True, text=True, timeout=300, encoding="utf-8")
             COLOR_CACHE[key] = json.loads(r.stdout or "{}")
         except (subprocess.SubprocessError, ValueError) as e:
@@ -1033,7 +1092,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(409, {"error": "another dialog or export is already running"})
                 try:
                     cur = current()
-                    r = subprocess.run([sys.executable, os.path.join(HERE, "project.py"), "--ask-model",
+                    r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "project.py"), "--ask-model",
                                         os.path.dirname(cur["path"]) if cur else ""], capture_output=True, encoding="utf-8",
                                        timeout=900, creationflags=0x08000000 if os.name == "nt" else 0)
                 finally:
@@ -1098,7 +1157,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not EXPORT_LOCK.acquire(blocking=False):
                     return self._send(409, {"error": "an export is already running (is a Save dialog open?)"})
                 try:
-                    r = subprocess.run([sys.executable, os.path.join(HERE, "export.py"), cur.get("step") or cur["path"],
+                    r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "export.py"), cur.get("step") or cur["path"],
                                         fmt, "--quality", quality], capture_output=True, text=True, timeout=900,
                                        creationflags=0x08000000 if os.name == "nt" else 0)
                 finally:
@@ -1120,7 +1179,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     dest = body.get("dest")
                     if not dest:
-                        r = subprocess.run([sys.executable, os.path.join(HERE, "project.py"), "--ask"], capture_output=True,
+                        r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "project.py"), "--ask"], capture_output=True,
                                            text=True, timeout=900, creationflags=0x08000000 if os.name == "nt" else 0)
                         dest = (r.stdout or "").strip().splitlines()[-1] if (r.stdout or "").strip() else ""
                     if not dest:
@@ -1138,6 +1197,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if url.path == "/api/data":
                 STATE["data"] = body.get("data") or STATE["data"]
+                housekeep(STATE["data"])
                 return self._send(200, {"ok": True})
 
             if url.path == "/api/annotate":
@@ -1413,6 +1473,7 @@ def main():
         return
 
     STATE["data"] = a.data
+    housekeep(a.data)
     try:
         srv = ThreadingHTTPServer(("0.0.0.0" if lan_on() else "127.0.0.1", a.port), Handler)
     except OSError:

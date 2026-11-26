@@ -1,7 +1,10 @@
 """Token-saving helpers of the viewer: app-wide settings, the shape of a note for Claude, model hints,
 local checks after a rebuild and parameter sweeps (variants without Claude).
 
-Settings live in ~/.CAD4Ai-settings.json (one file for the whole app, every model and project).
+Everything the app keeps for itself lives in one folder, ~/.CAD4Ai (CAD4AI_HOME overrides it):
+settings.json (whole app) and history/<model key>/<version> (versions of every model, trimmed to
+history.keep). Model files, their variants and side files (.parts.json, .motion.json...) stay next to
+the model; per-session notes and screenshots stay in the session's .CAD4Ai/s-xxx folder.
 """
 import json
 import os
@@ -11,7 +14,12 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".CAD4Ai-settings.json")
+APP_HOME = os.environ.get("CAD4AI_HOME") or os.path.join(os.path.expanduser("~"), ".CAD4Ai")
+SETTINGS_FILE = os.path.join(APP_HOME, "settings.json")
+_OLD_SETTINGS = os.path.join(os.path.expanduser("~"), ".CAD4Ai-settings.json")
+if not os.path.isfile(SETTINGS_FILE) and os.path.isfile(_OLD_SETTINGS):
+    os.makedirs(APP_HOME, exist_ok=True)
+    os.replace(_OLD_SETTINGS, SETTINGS_FILE)
 
 DEFAULTS = {
     "note.parts": "nearby",       # all | nearby | none
@@ -24,6 +32,7 @@ DEFAULTS = {
     "related.max": 12,
     "checks.afterRebuild": "basic",   # off | basic | full
     "quick.screenshot": False,
+    "history.keep": 30,               # versions kept per model
 }
 
 
@@ -49,6 +58,7 @@ def save_settings(values):
         else:
             v = str(v)
         cur[k] = v
+    os.makedirs(APP_HOME, exist_ok=True)
     tmp = SETTINGS_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cur, f, indent=1)
@@ -193,7 +203,9 @@ def check_model(step):
     key = (os.path.abspath(step), os.path.getmtime(step))
     if key in CHECK_CACHE:
         return CHECK_CACHE[key]
-    r = subprocess.run([sys.executable, os.path.join(HERE, "checks.py"), step], capture_output=True, text=True,
+    if len(CHECK_CACHE) >= 16:
+        CHECK_CACHE.pop(next(iter(CHECK_CACHE)))
+    r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "checks.py"), step], capture_output=True, text=True,
                        timeout=600, encoding="utf-8")
     try:
         res = json.loads(r.stdout.strip().splitlines()[-1])

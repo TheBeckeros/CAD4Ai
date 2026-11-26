@@ -370,7 +370,7 @@ function rememberTabCamera() {
 function tabLoaded(info, keepCamera) {
   const key = tabKey(info.path);
   let t = mtabs.find(x => x.key === key);
-  if (!t) { t = { key }; mtabs.push(t); }
+  if (!t) { t = { key }; mtabs.push(t); if (mtabs.length > 20) mtabs.splice(0, mtabs.length - 20); }
   t.path = info.path; t.name = info.name.replace(/\.(step|stp|stl)$/i, '');
   let restored = false;
   if (!keepCamera && t.cam) {
@@ -3556,6 +3556,9 @@ const SETTINGS_UI = [
   { sec: 'After a rebuild (Params tab)' },
   { k: 'checks.afterRebuild', label: 'Checks', opts: [['basic', 'Validity and volume'], ['full', '+ collisions'], ['off', 'Off']],
     x: 'Runs on this computer, <em>no tokens</em>. “Validity and volume” checks every solid (BRepCheck) and the volume change against the last rebuild (about 5 s for the panel). “+ collisions” also runs the collision analysis of the Analyze tab and colours the touching places.' },
+  { sec: 'Storage' },
+  { k: 'history.keep', label: 'Versions kept per model', num: [5, 500],
+    x: 'Every rebuild or export stores a version (STEP + script) in <span class="mono">~/.CAD4Ai/history</span>: one place for all models and sessions, never inside a project or the app folder. Older versions beyond this number are deleted. One version of a large assembly can take several MB.' },
   { sec: 'Quick change (right-click menu)' },
   { k: 'quick.screenshot', label: 'Screenshot with a quick change', bool: true,
     x: 'A quick change sends the clicked face, the related parameters and your sentence. Without the picture it is the cheapest way to ask Claude for a small edit.' },
