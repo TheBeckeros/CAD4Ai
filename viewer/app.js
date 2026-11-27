@@ -126,7 +126,7 @@ let measPicks = [];
 let measSel = null;          // id of the selected dimension (label click or list click), Delete removes it
 let measDirty = false;       // redraw all dimensions on the next frame (camera moved, display changed)
 const section = { on: false, mode: 'z', flip: false, t: 0.5, d: 0, n: new THREE.Vector3(0, 0, 1), plane: new THREE.Plane(), az: 0, el: 90, extra: [], box: new THREE.Box3() };
-const display = { edges: true, wire: false, grid: false, axes: false, look: 'shaded', shadow: false, ao: false, cube: true, triad: true, alpha: 0.4 }; // alpha: opacity of parts marked transparent
+const display = { edges: true, wire: false, grid: false, axes: false, look: 'shaded', shadow: false, ao: false, cube: true, triad: true, pivot: false, alpha: 0.4 }; // alpha: opacity of parts marked transparent
 let explode = 0;
 const xplan = { def: null, error: '', mode: 'radial', s: 0, playing: false, last: 0, modelPath: '', trails: new THREE.Group() };
 scene.add(xplan.trails);
@@ -2533,25 +2533,52 @@ let downAt = null, rightDownAt = null, midDownAt = null, lastPointer = null, cub
 const cvs = renderer.domElement;
 // middle drag rotates, right drag and Ctrl + middle drag pan. Set before TrackballControls reads the press.
 cvs.addEventListener('pointerdown', ev => { controls.mouseButtons = ev.button === 1 && ev.ctrlKey ? { LEFT: -1, MIDDLE: -1, RIGHT: 1 } : ev.button === 2 ? { LEFT: -1, MIDDLE: -1, RIGHT: 2 } : { LEFT: 1, MIDDLE: -1, RIGHT: -1 }; }, true);
-// middle-drag pivot: TrackballControls rotates about controls.target; after each rotation step shift camera and target
-// by (I - q)(pivot - target), which turns that into the same rotation about the point under the cursor (no jump).
-// No model under the cursor: pivot stays null and the rotation is about the target, the screen-centre point at the current distance.
-let pivot = null;
+// middle-drag pivot (as in SolidWorks): TrackballControls rotates about controls.target; after each rotation step shift
+// camera and target by (I - q)(pivot - target), which turns that into the same rotation about the pivot (no jump).
+// Pivot = the surface point under the cursor. Over empty space: the point on the cursor ray at the depth of the last
+// surface the cursor was over (so a zoomed-in view keeps rotating locally), or at the target depth before any hover.
+// After the drag the target moves along the view axis to the pivot depth: later zoom / rotation stays local too.
+let pivot = null, lastHitDepth = null;
 const pivotQ = new THREE.Quaternion();
+const pivotMark = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xe07a5f, depthTest: false, transparent: true, opacity: 0.9 }));
+pivotMark.renderOrder = 10; pivotMark.visible = false; scene.add(pivotMark);
+function viewDepth(p) { const v = camera.getWorldDirection(new THREE.Vector3()); return v.dot(p.clone().sub(camera.position)); }
+function pivotAt(ev) {
+  const h = faceHit(ev);
+  if (h) { lastHitDepth = viewDepth(h.world); return h.world; }
+  const px = eventPx(ev);
+  ndc.set((px.x / px.w) * 2 - 1, -(px.y / px.h) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const v = camera.getWorldDirection(new THREE.Vector3());
+  const depth = lastHitDepth ?? viewDepth(controls.target);
+  const along = depth - v.dot(raycaster.ray.origin.clone().sub(camera.position));     // ortho rays start on the near plane
+  return raycaster.ray.origin.clone().addScaledVector(raycaster.ray.direction, along / Math.max(1e-6, v.dot(raycaster.ray.direction)));
+}
+function showPivot(p) {
+  pivotMark.visible = !!p && display.pivot;   // Display menu > Orbit centre marker (off by default)
+  if (!p) return;
+  pivotMark.position.copy(p);
+  const s = camera.isOrthographicCamera ? (camera.top - camera.bottom) / camera.zoom * 0.006 : Math.max(1e-3, viewDepth(p)) * 0.006;
+  pivotMark.scale.setScalar(s);
+}
+function retargetToPivot(p) {   // same view, target on the view axis at the pivot depth
+  const v = camera.getWorldDirection(new THREE.Vector3()), d = viewDepth(p);
+  if (d > 0) { controls.target.copy(camera.position).addScaledVector(v, d); controls.update(); }
+}
 controls.addEventListener('change', () => {
   if (!pivot) return;
   const q = camera.quaternion.clone().multiply(pivotQ.invert());
   pivotQ.copy(camera.quaternion);
   const d = pivot.clone().sub(controls.target), off = d.clone().sub(d.clone().applyQuaternion(q));
   camera.position.add(off); controls.target.add(off);
+  showPivot(pivot);
 });
 cvs.addEventListener('pointerdown', ev => {
   $('pinpop').style.display = 'none';
   closeMenus();
   if (ev.button === 2) rightDownAt = { x: ev.clientX, y: ev.clientY };
   if (ev.button === 1) midDownAt = { x: ev.clientX, y: ev.clientY };
-  // pivot under the cursor but at the target depth: a pivot on the grabbed surface freezes that point on screen, which feels heavy
-  if (ev.button === 1 && !ev.ctrlKey && controls.enabled) { const h = faceHit(ev)?.world, v = camera.getWorldDirection(new THREE.Vector3()); pivot = h ? h.addScaledVector(v, -v.dot(h.clone().sub(controls.target))) : null; pivotQ.copy(camera.quaternion); }
+  if (ev.button === 1 && !ev.ctrlKey && controls.enabled && model.parts.length) { pivot = pivotAt(ev); pivotQ.copy(camera.quaternion); showPivot(pivot); }
   if (ev.button !== 0) return;
   downAt = { x: ev.clientX, y: ev.clientY };
   cubeDown = cubeDir(ev);
@@ -2594,6 +2621,7 @@ cvs.addEventListener('pointermove', ev => {
     setHover(pk);
     if (measPicks.length || measPrev.length) measPreview(pk, e);
     const h = pk || faceHit(e);
+    if (h?.world) lastHitDepth = viewDepth(h.world);
     if (pk) { const inf = entityInfo(pk); $('hover').textContent = `${inf.title}: ${inf.desc} · point ${fmtv(pk.local)}`; }
     else if (h) $('hover').textContent = `point ${fmtv(h.local)} · ${model.parts.length > 1 ? model.parts[h.part].name + ' · ' : ''}face #${h.faceId}${anaReadout(h)}`;
     else $('hover').textContent = '';
@@ -2604,7 +2632,8 @@ cvs.addEventListener('pointerup', ev => {
   if (painting) { endPaint(); return; }
   // keep the pivot for the controls' last update (next frame), then drop it so view animations are not corrected
   if (ev.button === 1) {
-    const p = pivot; requestAnimationFrame(() => { if (pivot === p) pivot = null; });
+    const p = pivot;
+    requestAnimationFrame(() => { if (pivot === p) { pivot = null; showPivot(null); if (p) retargetToPivot(p); } });
     // a middle click (not a rotate drag) in Measure deletes all dimensions
     const click = midDownAt && Math.hypot(ev.clientX - midDownAt.x, ev.clientY - midDownAt.y) <= 5;
     midDownAt = null;
@@ -2623,7 +2652,7 @@ cvs.addEventListener('pointerup', ev => {
     measureClick(pickAt(ev, $('measMode').value === 'min' ? 'part' : 'auto'), ev.shiftKey, ev);
   } else if (tool === 'mark') markClick(ev);
 });
-cvs.addEventListener('pointercancel', () => { endStroke(); endPaint(); pivot = null; });
+cvs.addEventListener('pointercancel', () => { endStroke(); endPaint(); pivot = null; showPivot(null); });
 cvs.addEventListener('pointerleave', () => { lastPointer = null; cubeHl.visible = false; setHover(null); clearMeasPrev(); $('hover').textContent = ''; });
 // right click (no drag, since right-drag pans) on a part: hide, isolate, transparency, look at the face
 cvs.addEventListener('contextmenu', ev => {
@@ -2832,7 +2861,7 @@ $('bOpen').onclick = openFile;
 $('bProject').onclick = saveProject;
 $('bShot').onclick = () => saveShot().catch(e => toast('Could not save the screenshot: ' + e.message, true));
 $('bFit').onclick = () => setView('', true, camera.position.clone().sub(controls.target).normalize().toArray());
-const DISP = [['dEdges', 'edges'], ['dWire', 'wire'], ['dGrid', 'grid'], ['dAxes', 'axes'], ['dShadow', 'shadow'], ['dAO', 'ao'], ['dCube', 'cube'], ['dTriad', 'triad']];
+const DISP = [['dEdges', 'edges'], ['dWire', 'wire'], ['dGrid', 'grid'], ['dAxes', 'axes'], ['dShadow', 'shadow'], ['dAO', 'ao'], ['dCube', 'cube'], ['dTriad', 'triad'], ['dPivot', 'pivot']];
 function applyDisplay() {
   renderer.shadowMap.enabled = display.shadow; sunLight.castShadow = display.shadow; sunLight.intensity = display.shadow ? 1.7 : 0;
   camLight.intensity = camLight2.intensity = display.shadow ? 0.6 : 1.5;   // the sun takes over so its shadows read
