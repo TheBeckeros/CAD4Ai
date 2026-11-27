@@ -370,7 +370,7 @@ def step_file(code):
     p = os.path.join(core.CACHE, "std", safe + ".v3.step")  # v3: registry families, colours
     if not os.path.isfile(p):
         os.makedirs(os.path.dirname(p), exist_ok=True)
-        assy = cq.Assembly(name=safe)
+        assy = cq.Assembly(name=safe + "_preview")   # never the part's own name (bearing codes have no spaces)
         assy.add(part(code), name=code.strip())
         _ac(assy)
         assy.export(p)

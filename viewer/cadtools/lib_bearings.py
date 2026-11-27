@@ -83,6 +83,20 @@ def _balls(dm, z, Dw, n):
     return sol
 
 
+def _cage(elements, bands):
+    """Rolling elements fused with their cage into ONE solid (as in a real bearing, and so the viewer shows one
+    part, not dozens). bands: [(r_mid, half_width, z0, h)] rings of revolution placed inside the elements."""
+    import cadquery as cq
+    w = None
+    for r_mid, hw, z0, h in bands:
+        b = F.ring(r_mid + hw, r_mid - hw, h, z0)
+        w = b if w is None else w.union(b)
+    for e in elements:
+        w = w.union(cq.Workplane("XY").add(e))
+    F.paint(w, F.DARK_STEEL)
+    return w.val()
+
+
 def ball_bearing(d, D, B, seal="", rows=1, angular=False, self_align=False):
     import cadquery as cq
     t = (D - d) / 2
@@ -100,7 +114,7 @@ def ball_bearing(d, D, B, seal="", rows=1, angular=False, self_align=False):
             outer = outer.cut(cq.Workplane("XY").add(cq.Solid.makeTorus(dm / 2, gr, pnt=cq.Vector(0, 0, z))))
         inner = inner.cut(cq.Workplane("XY").add(cq.Solid.makeTorus(dm / 2, gr, pnt=cq.Vector(0, 0, z))))
     if self_align:  # spherical outer raceway
-        R = math.hypot(dm / 2 + Dw / 2, (zs[-1] - zs[0]) / 2) if rows == 2 else dm / 2 + Dw / 2
+        R = (math.hypot(dm / 2 + Dw / 2, (zs[-1] - zs[0]) / 2) if rows == 2 else dm / 2 + Dw / 2) + 0.04 * Dw
         outer = outer.cut(cq.Workplane("XY").add(cq.Solid.makeSphere(R, cq.Vector(0, 0, B / 2), angleDegrees1=-90, angleDegrees2=90)))
     if angular:  # lowered outer shoulder on face B side
         outer = outer.cut(F.ring(dm / 2 + 0.5 * Dw, 0, B / 2, B / 2 + 0.01))
@@ -115,10 +129,8 @@ def ball_bearing(d, D, B, seal="", rows=1, angular=False, self_align=False):
             parts.append(disc.val())
     else:
         n = max(6, int(math.pi * dm / (Dw * 1.45)))
-        for z in zs:
-            for b_ in _balls(dm, z, Dw, n):
-                parts.append(b_)
-        F.paint(cq.Workplane("XY").add(parts[2]), F.DARK_STEEL)
+        balls = [b_ for z in zs for b_ in _balls(dm, z, Dw, n)]
+        parts.append(_cage(balls, [(dm / 2, 0.17 * Dw, zs[0] - 0.19 * Dw, zs[-1] - zs[0] + 0.38 * Dw)]))
     return cq.Workplane("XY").add(cq.Compound.makeCompound(parts))
 
 
@@ -129,13 +141,10 @@ def thrust_bearing(d, D, H):
     dm = (D + d) / 2
     shaft_w = F.ring(D / 2 - 0.02 * D, d / 2, hw, H - hw)
     house_w = F.ring(D / 2, d / 2 + 0.03 * D + 0.2, hw, 0)
-    for w_, z in ((shaft_w, H - hw), (house_w, hw)):
-        pass
     tor_lo = cq.Workplane("XY").add(cq.Solid.makeTorus(dm / 2, 0.52 * Dw, pnt=cq.Vector(0, 0, H / 2)))
     shaft_w, house_w = shaft_w.cut(tor_lo), house_w.cut(tor_lo)
     n = max(6, int(math.pi * dm / (Dw * 1.5)))
-    parts = [house_w.val(), shaft_w.val()] + _balls(dm, H / 2, Dw, n)
-    F.paint(cq.Workplane("XY").add(parts[2]), F.DARK_STEEL)
+    parts = [house_w.val(), shaft_w.val(), _cage(_balls(dm, H / 2, Dw, n), [(dm / 2, 0.17 * Dw, H / 2 - 0.19 * Dw, 0.38 * Dw)])]
     return cq.Workplane("XY").add(cq.Compound.makeCompound(parts))
 
 
@@ -160,36 +169,46 @@ def roller_bearing(d, D, B, kind="NU"):
     n = max(8, int(math.pi * dm / (Dw * 1.3)))
     rollers = [cq.Solid.makeCylinder(Dw / 2, Lw, cq.Vector(dm / 2 * math.cos(2 * math.pi * i / n), dm / 2 * math.sin(2 * math.pi * i / n), (B - Lw) / 2))
                for i in range(n)]
-    F.paint(cq.Workplane("XY").add(rollers[0]), F.DARK_STEEL)
-    return cq.Workplane("XY").add(cq.Compound.makeCompound([outer.val(), inner.val()] + rollers))
+    z0 = (B - Lw) / 2
+    cage = _cage(rollers, [(dm / 2, 0.22 * Dw, z0, 0.12 * Lw), (dm / 2, 0.22 * Dw, z0 + 0.88 * Lw, 0.12 * Lw)])
+    return cq.Workplane("XY").add(cq.Compound.makeCompound([outer.val(), inner.val(), cage]))
 
 
 def tapered_bearing(d, D, T, Bc, Cc):
-    """Tapered roller: cone (inner) width B from Z=0, cup (outer) width C at the back face Z=T, contact ~ 14 deg."""
+    """Tapered roller bearing: cone (inner ring, large end + back rib at Z=0, width B), cup (outer ring, width C at
+    the Z=T end), rollers inclined by 12 deg in a cage. Both raceways are offset from the roller axes by the roller
+    radius, so nothing overlaps (simplified: cylindrical rollers between parallel cones)."""
     import cadquery as cq
-    a = math.radians(14)
+    a = math.radians(12)
+    ta, ca = math.tan(a), math.cos(a)
     t = (D - d) / 2
-    dm = (D + d) / 2
-    Dw = 0.32 * t
-    Lw = 0.8 * Cc
-    zc = T / 2
-    # cup: outer cylinder D, inner cone
-    r_cup_mid = dm / 2 + Dw / 2
-    tan = math.tan(a)
-    cup = F.revolve([(D / 2, T - Cc), (D / 2, T), (r_cup_mid + (T - zc) * tan + 0.3, T), (r_cup_mid - (zc - (T - Cc)) * tan, T - Cc)])
-    r_cone_mid = dm / 2 - Dw / 2
-    cone = F.revolve([(d / 2, 0), (r_cone_mid - zc * tan - 0.4 * Dw, 0), (r_cone_mid - zc * tan - 0.4 * Dw, 0.12 * Bc),
-                      (r_cone_mid - zc * tan + 0.05, 0.12 * Bc), (r_cone_mid + (Bc - zc) * tan, Bc), (d / 2, Bc)])
-    n = max(8, int(math.pi * dm / (Dw * 1.35)))
+    rm, zc = (D + d) / 4, T / 2
+    rho = 0.18 * t
+    cl = 0.03 * rho
+    Lw = 0.7 * Cc
+
+    def r_ax(z):                       # roller axis radius at height z (narrows towards +Z)
+        return rm - (z - zc) * ta
+    def r_cup(z):
+        return r_ax(z) + rho / ca + cl
+    def r_cone(z):
+        return r_ax(z) - rho / ca - cl
+    z0c = T - Cc
+    cup = F.revolve([(D / 2, z0c), (D / 2, T), (r_cup(T), T), (r_cup(z0c), z0c)])
+    sz = zc - Lw / 2 * ca                                     # lower end centre height of a roller
+    z_rib = max(0.1 * Bc, sz - rho * math.sin(a) - 0.2)
+    rib_r = r_cone(0) + 0.6 * rho
+    cone = F.revolve([(d / 2, 0), (rib_r, 0), (rib_r, z_rib), (r_cone(z_rib), z_rib), (r_cone(Bc), Bc), (d / 2, Bc)])
+    n = max(8, int(2 * math.pi * rm / (2 * rho * 1.25)))
     rollers = []
     for i in range(n):
-        ang = 2 * math.pi * i / n
-        base = cq.Solid.makeCone(Dw / 2 * 0.92, Dw / 2 * 1.08, Lw, cq.Vector(0, 0, 0), cq.Vector(0, 0, 1))
-        base = base.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 1, 0), -math.degrees(a))
-        base = base.translate(cq.Vector(dm / 2 - Lw / 2 * math.sin(a), 0, zc - Lw / 2 * math.cos(a)))
-        rollers.append(base.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), math.degrees(ang)))
-    F.paint(cq.Workplane("XY").add(rollers[0]), F.DARK_STEEL)
-    return cq.Workplane("XY").add(cq.Compound.makeCompound([cup.val(), cone.val()] + rollers))
+        cyl = cq.Solid.makeCylinder(rho, Lw, cq.Vector(0, 0, -Lw / 2), cq.Vector(0, 0, 1))
+        cyl = cyl.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 1, 0), -math.degrees(a)).translate(cq.Vector(rm, 0, zc))
+        rollers.append(cyl.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), 360.0 * i / n))
+    h = 0.1 * Lw
+    z_lo, z_hi = zc - 0.38 * Lw * ca, zc + 0.38 * Lw * ca     # cage rings near the roller ends, inside the rollers
+    bands = [(r_ax(z_lo), 0.35 * rho, z_lo - h / 2, h), (r_ax(z_hi), 0.35 * rho, z_hi - h / 2, h)]
+    return cq.Workplane("XY").add(cq.Compound.makeCompound([cup.val(), cone.val(), _cage(rollers, bands)]))
 
 
 def needle_cup(d, D, C):
@@ -203,8 +222,9 @@ def needle_cup(d, D, C):
     n = max(8, int(math.pi * dm / (Dw * 1.12)))
     needles = [cq.Solid.makeCylinder(Dw / 2 * 0.98, Lw, cq.Vector(dm / 2 * math.cos(2 * math.pi * i / n), dm / 2 * math.sin(2 * math.pi * i / n), tc + 0.2))
                for i in range(n)]
-    F.paint(cq.Workplane("XY").add(needles[0]), F.DARK_STEEL)
-    return cq.Workplane("XY").add(cq.Compound.makeCompound([cup.val()] + needles))
+    z0 = tc + 0.2
+    cage = _cage(needles, [(dm / 2, 0.2 * Dw, z0, 0.12 * Lw), (dm / 2, 0.2 * Dw, z0 + 0.88 * Lw, 0.12 * Lw)])
+    return cq.Workplane("XY").add(cq.Compound.makeCompound([cup.val(), cage]))
 
 
 # ---------------------------------------------------------------- families
