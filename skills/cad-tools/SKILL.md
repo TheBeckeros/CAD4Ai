@@ -26,7 +26,9 @@ Keep modelling natively: a Python CadQuery script that exports STEP. These tools
 - `@cached_part` (from cadtools.cache) on functions that build a finished part: unchanged parts load from
   disk in milliseconds on the next run (key = source + arguments + every global/parameter they use).
 - Threads (convention, always): screw / stud / external thread = NOMINAL diameter (M4 -> 4.0); tapped hole /
-  nut / internal thread = TAP DRILL hole (M4 -> 3.3, `tap_drill("M4")`). Their overlap is then an expected
+  nut / internal thread = TAP DRILL hole (M4 -> 3.3, `tap_drill("M4")`), always a real drill bit size
+  (M3 2.5, M4 3.3, M5 4.2, M6 5.0, M8 6.8, M10 8.5, M12 10.2; fine `tap_drill("M10x1.25")` 8.8), never a
+  computed minor diameter such as 4.134; lint warns about one. Their overlap is then an expected
   thread engagement, not a collision. Clearance holes: `cad4ai std hole M4` (4.5). Name screws with their size
   (`SROUB_M4x12`, `ISO 4762 M4x12`) so the check knows the thread.
 - `part("ISO 4762 M5x16")`, `tap_drill`, `nominal` from cadtools.std instead of typed numbers.

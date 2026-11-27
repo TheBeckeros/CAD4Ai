@@ -9,7 +9,8 @@ CLI: cad4ai std "ISO 4762 M5x16" | cad4ai std hole M5 | cad4ai std list
 Generated STEP files are cached in ~/.CAD4Ai/cache/std (instant the second time).
 THREAD CONVENTION (simplified representation, used everywhere in CAD4Ai):
   external thread (screw, stud, threaded shaft) = cylinder of the NOMINAL diameter (M4 -> 4.0);
-  internal thread (tapped hole, nut)            = hole of the TAP DRILL diameter   (M4 -> 3.3).
+  internal thread (tapped hole, nut)            = hole of the TAP DRILL diameter   (M4 -> 3.3),
+  always a standard drill bit (3.3, 4.2, 6.8, 8.5 ...), never a computed minor diameter like 4.134.
   So a screw in its thread overlaps the part by a thin ring on purpose; the collision check knows this
   and reports it as an expected thread engagement, not as a collision. Use tap_drill("M4") for the hole.
 Values: ISO/DIN nominal dimensions (max head sizes) for metric coarse threads.
@@ -17,14 +18,19 @@ Values: ISO/DIN nominal dimensions (max head sizes) for metric coarse threads.
 import os
 import re
 
-# --- metric threads: pitch, tap drill, clearance fine/medium/coarse (ISO 273)
+# --- metric coarse threads: pitch, tap drill, clearance fine/medium/coarse (ISO 273)
+# Tap drill = a drill bit you can buy (0.1 mm steps, 0.5 mm from M20 up), never the computed minor diameter.
 THREAD = {
-    "M2": (0.4, 1.6, 2.2, 2.4, 2.6), "M2.5": (0.45, 2.05, 2.7, 2.9, 3.1), "M3": (0.5, 2.5, 3.2, 3.4, 3.6),
+    "M2": (0.4, 1.6, 2.2, 2.4, 2.6), "M2.5": (0.45, 2.1, 2.7, 2.9, 3.1), "M3": (0.5, 2.5, 3.2, 3.4, 3.6),
     "M4": (0.7, 3.3, 4.3, 4.5, 4.8), "M5": (0.8, 4.2, 5.3, 5.5, 5.8), "M6": (1.0, 5.0, 6.4, 6.6, 7.0),
     "M8": (1.25, 6.8, 8.4, 9.0, 10.0), "M10": (1.5, 8.5, 10.5, 11.0, 12.0), "M12": (1.75, 10.2, 13.0, 13.5, 14.5),
-    "M14": (2.0, 12.0, 15.0, 15.5, 16.5), "M16": (2.0, 14.0, 17.0, 17.5, 18.5), "M20": (2.5, 17.5, 21.0, 22.0, 24.0),
-    "M24": (3.0, 21.0, 25.0, 26.0, 28.0),
+    "M14": (2.0, 12.0, 15.0, 15.5, 16.5), "M16": (2.0, 14.0, 17.0, 17.5, 18.5), "M18": (2.5, 15.5, 19.0, 20.0, 21.0),
+    "M20": (2.5, 17.5, 21.0, 22.0, 24.0), "M22": (2.5, 19.5, 23.0, 24.0, 26.0), "M24": (3.0, 21.0, 25.0, 26.0, 28.0),
+    "M27": (3.0, 24.0, 28.0, 30.0, 32.0), "M30": (3.5, 26.5, 31.0, 33.0, 35.0),
 }
+# metric fine threads: tap drill (nominal - pitch, a standard bit)
+FINE = {"M8x1": 7.0, "M10x1": 9.0, "M10x1.25": 8.8, "M12x1.25": 10.8, "M12x1.5": 10.5, "M14x1.5": 12.5,
+        "M16x1.5": 14.5, "M18x1.5": 16.5, "M20x1.5": 18.5, "M22x1.5": 20.5, "M24x2": 22.0}
 # ISO 4762 socket head cap screw: head dk, head k, hex socket s, socket depth t
 ISO4762 = {"M2": (3.8, 2, 1.5, 1), "M2.5": (4.5, 2.5, 2, 1.1), "M3": (5.5, 3, 2.5, 1.3), "M4": (7, 4, 3, 2),
            "M5": (8.5, 5, 4, 2.5), "M6": (10, 6, 5, 3), "M8": (13, 8, 6, 4), "M10": (16, 10, 8, 5),
@@ -104,8 +110,15 @@ def _len(code):
 
 
 def tap_drill(size):
-    """Hole diameter of an internal thread (tapped hole, nut) by the CAD4Ai convention: 'M4' -> 3.3."""
-    return THREAD[_m(size) or size][1]
+    """Hole diameter of an internal thread (tapped hole, nut) by the CAD4Ai convention: 'M4' -> 3.3,
+    fine 'M10x1.25' -> 8.8. Always a standard drill bit size."""
+    f = re.fullmatch(r"\s*(M\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*", str(size))
+    if f and f"{f.group(1).upper()}x{float(f.group(2)):g}" in FINE:
+        return FINE[f"{f.group(1).upper()}x{float(f.group(2)):g}"]
+    s = _m(size) or size
+    if s not in THREAD:
+        raise ValueError(f"unknown thread {size}; known: {', '.join(THREAD)} and fine {', '.join(FINE)}")
+    return THREAD[s][1]
 
 
 def nominal(size):

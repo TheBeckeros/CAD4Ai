@@ -17,6 +17,24 @@ NOMINAL = {int(k[1:]): (v[3], v[1]) for k, v in THREAD.items() if float(k[1:]).i
 BOOL = {"cut", "union", "intersect", "cutBlind", "cutThruAll", "fuse"}
 
 
+TAPS = {v[1]: k for k, v in THREAD.items()}
+HOLE_NAME = re.compile(r"TAP|BORE|HOLE|DRILL|DIRA|VRT|_D$|^D_", re.I)   # a hole diameter, not a length
+THREAD_NAME = re.compile(r"TAP|THREAD|NUT|ZAVIT|MATIC", re.I)            # ... of an internal thread
+
+
+def _odd_hole(name, v):
+    """Warning text when a hole parameter is not a size you can drill (4.134 instead of 4.2)."""
+    if not isinstance(v, (int, float)) or isinstance(v, bool) or not HOLE_NAME.search(name) or not 1 <= v <= 40:
+        return None
+    if THREAD_NAME.search(name) and v not in TAPS:
+        near = min(THREAD, key=lambda k: abs(THREAD[k][1] - v))
+        return (f"{name} = {v:g} is not a tap drill size; an {near} internal thread is modelled at "
+                f"{THREAD[near][1]:g} (tap_drill(\"{near}\"))")
+    if abs(v * 10 - round(v * 10)) > 1e-6:
+        return f"{name} = {v:g}: drill bits come in 0.1 mm steps ({round(v, 1):g}), or use tap_drill() / hole()"
+    return None
+
+
 def _chain(node):
     """Method names of a call chain a.b().c().d() -> ['b','c','d'] and the root name."""
     names = []
@@ -60,6 +78,9 @@ def lint(script):
                 add(n.lineno, "warn", f"parameter {n.targets[0].id} has no comment (\"# what [mm] lo..hi\")")
             elif not re.search(r"\[[^\]]+\]", line.split("#", 1)[1]) and not isinstance(getattr(v, "value", None), bool):
                 add(n.lineno, "info", f"parameter {n.targets[0].id}: no [unit] in its comment")
+            msg = _odd_hole(n.targets[0].id, getattr(v, "value", None))
+            if msg:
+                add(n.lineno, "warn", msg)
     used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
     used |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
     # parameters may be read by local modules (import model as M; M.WALL), by name (globals()) or by a
