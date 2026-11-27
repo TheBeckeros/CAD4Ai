@@ -475,7 +475,9 @@ function setView(name, animate = true, dirOverride) {
   const up = Math.abs(dir.z) > 0.99 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
   flyTo(s.center.clone().addScaledVector(dir, dist), s.center.clone(), up, animate);
   persp.near = dist / 1000; persp.far = dist * 100; persp.updateProjectionMatrix();
+  fitNear = persp.near;
 }
+let fitNear = 0.01;   // near plane of the last fit; wheel zoom lowers it when the camera gets closer
 function fitTo(sphere) {
   const dir = camera.position.clone().sub(controls.target).normalize();
   const dist = Math.max(sphere.radius, model.radius * 0.05) / Math.sin(THREE.MathUtils.degToRad(persp.fov / 2)) * 1.3;
@@ -2532,7 +2534,15 @@ document.querySelectorAll('.sw').forEach(b => b.onclick = () => { document.query
 let downAt = null, rightDownAt = null, midDownAt = null, lastPointer = null, cubeDown = null;
 const cvs = renderer.domElement;
 // middle drag rotates, right drag and Ctrl + middle drag pan. Set before TrackballControls reads the press.
-cvs.addEventListener('pointerdown', ev => { controls.mouseButtons = ev.button === 1 && ev.ctrlKey ? { LEFT: -1, MIDDLE: -1, RIGHT: 1 } : ev.button === 2 ? { LEFT: -1, MIDDLE: -1, RIGHT: 2 } : { LEFT: 1, MIDDLE: -1, RIGHT: -1 }; }, true);
+// Pans (right drag, Ctrl + middle drag) are handled here (startPan / movePan), so the controls get no button for them.
+cvs.addEventListener('pointerdown', ev => {
+  const pan = (ev.button === 1 && ev.ctrlKey) || ev.button === 2;
+  controls.mouseButtons = pan ? { LEFT: -1, MIDDLE: -1, RIGHT: -1 } : { LEFT: 1, MIDDLE: -1, RIGHT: -1 };
+  if (pan && controls.enabled && model.parts.length) startPan(ev);
+}, true);
+cvs.addEventListener('pointermove', ev => { if (movePan(ev)) ev.stopImmediatePropagation(); }, true);
+cvs.addEventListener('pointerup', ev => endPan(ev), true);
+cvs.addEventListener('pointercancel', ev => endPan(ev), true);
 // middle-drag pivot (as in SolidWorks): TrackballControls rotates about controls.target; after each rotation step shift
 // camera and target by (I - q)(pivot - target), which turns that into the same rotation about the pivot (no jump).
 // Pivot = the surface point under the cursor. Over empty space: the point on the cursor ray at the depth of the last
@@ -2543,17 +2553,59 @@ const pivotQ = new THREE.Quaternion();
 const pivotMark = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xe07a5f, depthTest: false, transparent: true, opacity: 0.9 }));
 pivotMark.renderOrder = 10; pivotMark.visible = false; scene.add(pivotMark);
 function viewDepth(p) { const v = camera.getWorldDirection(new THREE.Vector3()); return v.dot(p.clone().sub(camera.position)); }
-function pivotAt(ev) {
-  const h = faceHit(ev);
-  if (h) { lastHitDepth = viewDepth(h.world); return h.world; }
+function rayPointAt(ev, depth) {   // point on the cursor ray at a view depth (perspective and ortho)
   const px = eventPx(ev);
   ndc.set((px.x / px.w) * 2 - 1, -(px.y / px.h) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
   const v = camera.getWorldDirection(new THREE.Vector3());
-  const depth = lastHitDepth ?? viewDepth(controls.target);
   const along = depth - v.dot(raycaster.ray.origin.clone().sub(camera.position));     // ortho rays start on the near plane
   return raycaster.ray.origin.clone().addScaledVector(raycaster.ray.direction, along / Math.max(1e-6, v.dot(raycaster.ray.direction)));
 }
+function pivotAt(ev) {   // surface point under the cursor, else the cursor ray at the last surface depth
+  const h = faceHit(ev);
+  if (h) { lastHitDepth = viewDepth(h.world); return h.world; }
+  const d = lastHitDepth ?? viewDepth(controls.target);
+  return rayPointAt(ev, d > 0 ? d : viewDepth(controls.target));
+}
+
+// Zoom and pan feel the same at any zoom level: the wheel scales the view about the point under the cursor by a
+// fixed ratio per notch, and a pan drags the grabbed point exactly with the cursor (rate from that point's depth).
+controls.noZoom = true; controls.noPan = true;
+const ZOOM_STEP = 1.15;    // per wheel notch
+cvs0().addEventListener('wheel', ev => {
+  if (!controls.enabled || !model.parts.length) return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  const notches = THREE.MathUtils.clamp(ev.deltaY / (ev.deltaMode === 1 ? 3 : ev.deltaMode === 2 ? 0.1 : 100), -5, 5);
+  const f = Math.pow(ZOOM_STEP, notches);   // > 1 = out
+  const P = pivotAt(ev);
+  if (camera.isOrthographicCamera) {
+    ortho.zoom = THREE.MathUtils.clamp(ortho.zoom / f, 1e-4, 1e6); ortho.updateProjectionMatrix();
+    const off = P.clone().sub(rayPointAt(ev, viewDepth(P)));   // keep P under the cursor
+    camera.position.add(off); controls.target.add(off);
+  } else {
+    camera.position.sub(P).multiplyScalar(f).add(P);
+    controls.target.sub(P).multiplyScalar(f).add(P);
+    const d = camera.position.distanceTo(P);
+    persp.near = Math.max(1e-5, Math.min(fitNear, d / 400));
+    persp.far = Math.max(persp.far, camera.position.distanceTo(model.center) + model.radius * 4);
+    persp.updateProjectionMatrix();
+  }
+  controls.update();
+}, { passive: false, capture: true });
+let panGrab = null;   // { point, depth, id }
+function startPan(ev) {
+  const P = pivotAt(ev);
+  panGrab = { point: P, depth: viewDepth(P), id: ev.pointerId };
+  try { cvs0().setPointerCapture(ev.pointerId); } catch { /* synthetic pointer */ }
+}
+function movePan(ev) {
+  if (!panGrab || ev.pointerId !== panGrab.id) return false;
+  const off = panGrab.point.clone().sub(rayPointAt(ev, panGrab.depth));
+  if (off.lengthSq() > 0) { camera.position.add(off); controls.target.add(off); controls.update(); }
+  return true;
+}
+function endPan(ev) { if (panGrab && (!ev || ev.pointerId === panGrab.id)) panGrab = null; }
+function cvs0() { return renderer.domElement; }
 function showPivot(p) {
   pivotMark.visible = !!p && display.pivot;   // Display menu > Orbit centre marker (off by default)
   if (!p) return;
