@@ -1,0 +1,11 @@
+
+přidat funkci aby v preview byly barvy podle skutečnych hodnot ve stepku
+
+mereni od os válcových ploch roztece os jakoby
+
+export step se sloučenymy valcovymi plochami aby tam nebyla na valcove plose ta podelna cala rozdělující face
+
+
+AT SE NEGENERUJE ANIMACE BY DEFAULT ANI NIC JAKO DISSASEMBLY, POUZE VECI KOLEM MODELU CO NEŽEROU TOKENY ZBYTEČNĚ, ZKRATKA VĚCI JAKO ANIMACE CO SE UDĚLA AZ PO POTVRZENI NAVRHU
+
+otázka: je možné přidat tabs jako například v inventoru dole na liště a mit zaroven otevřeny panel a po překliku jiny model? a takhle mezi nimi překlikávat a změny by se zapisovaly do adekvatni cesty ke každému modelu
