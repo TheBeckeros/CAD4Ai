@@ -5,6 +5,35 @@ description: Use whenever you work on a CAD model (STEP, CadQuery script) and wo
 
 # cad4ai: local CAD tools (save tokens, spend PC power)
 
+Keep modelling natively: a Python CadQuery script that exports STEP. These tools only check and help.
+
+## Writing a model script
+- New model: `cad4ai new model.py` writes a skeleton (parameter block, assembly, export, imports below).
+- At the end of the script state the intent; it is checked on the exported STEP after every run:
+  ```python
+  from cadtools.expect import expect
+  expect("plate").size(100, 60, 5).holes(4, d=5.5, pitch=(80, 40)).mass(max=300)
+  expect("shaft", "bearing").clearance(min=0)     # min/max distance, negative = overlap
+  expect("bolt").count(4); expect("lid").inside(zmax=120); expect.no_collisions()
+  ```
+  Write expect() lines for every dimension or relation the user asked for. A FAIL means the model is wrong
+  even though the script ran.
+- `@cached_part` (from cadtools.cache) on functions that build a finished part: unchanged parts load from
+  disk in milliseconds on the next run (key = source + arguments + every global/parameter they use).
+- `hole("M5")["clearance"]`, `part("ISO 4762 M5x16")` from cadtools.std instead of typed numbers.
+- parts.json: missing entries are added automatically after each export (type, standard, subassembly);
+  write only what cannot be guessed (material, special types).
+
+## Hooks (automatic, nothing to call)
+- Script run fails -> doctor result arrives with the tool output: failing line, cause, a value that works.
+  Apply it instead of guessing.
+- A .step changed -> diff, validity, expect() results, collisions, unexpected changes (parts that changed
+  although the parameters driving them did not).
+- A CadQuery script was written/edited -> lint warnings (duplicate names, fillet without selector,
+  hole(5) for M5, parameters without comment/unit, unused parameters).
+
+## Commands
+
 Run `python "<CAD4Ai>/viewer/cad4ai.py" <command> ...` (the SessionStart note gives the exact path).
 Prefer these over writing your own analysis scripts, reading STEP files, or screenshots.
 Results are cached per file version, so repeating a call is free.
@@ -17,6 +46,8 @@ Results are cached per file version, so repeating a call is free.
 | Holes, shafts, planes of one part | `holes M.step PART` |
 | Distance between parts, section, mass | `dist M.step A B`, `section M.step "Z=20"` (writes SVG), `mass M.step` |
 | CLAUDE.md change mode 2 / 3 | `verify M.step --level 2` / `--level 3 [--fem "part=P fix=xmin load=xmax=0,0,-100"]` |
+| Check a script before running | `lint S.py [--info]` |
+| Fill parts.json | `partsjson M.step` (also automatic) |
 | Script fails (fillet, chamfer, boolean, shell...) | `doctor S.py`: failing line, category, largest radius that works, whether removing the line helps. **Run it before trying fixes by hand.** |
 | Standard parts | `std "ISO 4762 M5x16"`, `std hole M5`, `std key 30`, `std 6204`, `std NEMA17`, `std list` |
 | Purchased part from a vendor STEP | `vendor V.step`: envelope, mounting faces, hole patterns, shafts |

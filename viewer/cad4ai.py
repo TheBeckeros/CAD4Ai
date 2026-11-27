@@ -10,6 +10,9 @@
   cad4ai verify   M.step [--level 2|3] [--script S.py]   B-rep validity + collisions (+ DFM, FEM if asked)
   cad4ai after    M.step                    short report after a rebuild (diff + validity + new collisions)
   cad4ai doctor   S.py                      run a failing script, find the line, bisect fillet/chamfer
+  cad4ai lint     S.py [--info]             static check before running (names, fillets, hole sizes, params)
+  cad4ai new      S.py [--title ..]         script skeleton: params, assembly, export, expect(), std, cache
+  cad4ai partsjson M.step                   fill in missing parts.json entries
   cad4ai std      "ISO 4762 M5x16" | hole M5 | key 30 | list [--step]
   cad4ai vendor   V.step                    mounting interface of a purchased part
   cad4ai fem      M.step PART --fix xmin --load "xmax=0,0,-100" [--material al] [--elements 60000]
@@ -57,6 +60,16 @@ def cmd_diff(a):
     _text(digest.diff(prev, d))
 
 
+def _expect_result(step):
+    from cadtools import expect
+    try:
+        with open(expect.result_file(step), encoding="utf-8") as f:
+            r = json.load(f)
+        return r["text"] if r.get("key") == core.file_key(step) else None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def cmd_after(a):
     """Compact report for hooks / after a rebuild."""
     from cadtools import digest, collide
@@ -64,9 +77,25 @@ def cmd_after(a):
     prev = digest.previous(a.step)
     digest.remember(a.step, d)
     L = [f"[CAD4Ai] {os.path.basename(a.step)}: {d['parts_n']} parts, {d['size']} mm, {d['mass_g']} g"]
-    L += ["  " + x for x in digest.diff(prev, d)[:15]]
+    diff_lines = digest.diff(prev, d)
+    L += ["  " + x for x in diff_lines[:15]]
     if d["invalid"]:
         L.append("  INVALID B-rep: " + ", ".join(d["invalid"][:10]))
+    ex = _expect_result(a.step)
+    if ex:
+        L += ["  " + x for x in ex.splitlines()]
+    try:
+        from cadtools import guard
+        L += ["  " + x for x in guard.check(a.step, diff_lines, d["parts_n"])]
+    except Exception as e:  # noqa: BLE001
+        L.append(f"  (change guard skipped: {type(e).__name__})")
+    try:
+        from cadtools import scaffold
+        added = scaffold.fill_parts_json(a.step)
+        if added:
+            L.append(f"  parts.json: added {len(added)} parts ({', '.join(added[:6])}{'...' if len(added) > 6 else ''})")
+    except Exception:  # noqa: BLE001
+        pass
     if d["parts_n"] > 1 and d["parts_n"] <= a.max_parts:
         c = collide.check(a.step, 0.0)
         if c["collisions"]:
@@ -76,6 +105,21 @@ def cmd_after(a):
             L.append(f"  collisions: none ({c['pairs_checked']} pairs" +
                      (f", {c['expected_fastener_overlaps']} fastener overlaps ignored" if c["expected_fastener_overlaps"] else "") + ")")
     _text(L)
+
+
+def cmd_lint(a):
+    from cadtools import lint
+    _text([lint.text(a.script, a.info)])
+
+
+def cmd_new(a):
+    from cadtools import scaffold
+    core.emit({"ok": True, "script": scaffold.new_script(a.script, a.title)})
+
+
+def cmd_partsjson(a):
+    from cadtools import scaffold
+    core.emit({"ok": True, "added": scaffold.fill_parts_json(a.step, only_with_script=False)})
 
 
 def cmd_collide(a):
@@ -217,6 +261,11 @@ def main(argv=None):
     add("diff", cmd_diff, "step")
     s = add("after", cmd_after, "step")
     s.add_argument("--max-parts", type=int, default=150)
+    s = add("lint", cmd_lint, "script")
+    s.add_argument("--info", action="store_true")
+    s = add("new", cmd_new, "script")
+    s.add_argument("--title")
+    add("partsjson", cmd_partsjson, "step")
     s = add("collide", cmd_collide, "step")
     s.add_argument("--limit", type=float, default=0.5)
     s.add_argument("--parts", nargs="*")

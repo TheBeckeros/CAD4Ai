@@ -45,6 +45,10 @@ def run(script):
         traceback.print_exc(file=err)
         code = 1
     finally:
+        ex = sys.modules.get("cadtools.expect")  # design-intent checks of this run (see cadtools/expect.py)
+        if ex is not None:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), contextlib.suppress(Exception):
+                ex.flush()
         os.chdir(cwd)
         sys.argv = argv
         with contextlib.suppress(ValueError):

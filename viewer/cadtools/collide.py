@@ -64,7 +64,7 @@ def _job(args):
     return out
 
 
-def check(step, limit=0.5, names=None):
+def check(step, limit=0.5, names=None, parallel=True):
     """limit: report clearances below this [mm]; names: only pairs involving these parts."""
     def go():
         model = core.load(step)
@@ -79,7 +79,7 @@ def check(step, limit=0.5, names=None):
                 if _overlap(bbs[a.name], bbs[b.name], limit):
                     pairs.append((a.name, b.name))
         found = []
-        if len(pairs) > 8:
+        if parallel and len(pairs) > 8:
             n = max(1, min(len(pairs) // 4, (os.cpu_count() or 2) - 1))
             chunks = [pairs[i::n] for i in range(n)]
             from concurrent.futures import ProcessPoolExecutor

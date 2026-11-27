@@ -3,14 +3,18 @@
   start  SessionStart: one line telling Claude where the cad4ai tools are.
   pre    PreToolUse(Read): refuse reading .step/.stp/.stl/.iges/.brep as text (huge, useless tokens);
          point to `cad4ai summary` instead.
-  post   PostToolUse(Bash|PowerShell): if a command just wrote/changed .step files under the working folder,
-         run `cad4ai after` on them (diff to the previous version, B-rep validity, collisions) and hand
-         Claude the few-line result, so it needs no screenshot or check script to see what changed.
+  post   PostToolUse / PostToolUseFailure (Bash|PowerShell):
+         - a CadQuery script the command ran ended with a traceback -> `cad4ai doctor` runs at once and
+           Claude gets the failing line, the cause and a working value (no trial-and-error rounds);
+         - .step files under the working folder changed -> `cad4ai after` (diff, validity, collisions,
+           expect() results, unrelated changes, parts.json filled in).
+  edit   PostToolUse(Write|Edit): a CadQuery script was written -> `cad4ai lint`; only warnings are reported.
 Set CAD4AI_HOOKS=0 to switch them off.
 """
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -20,6 +24,7 @@ CLI = os.path.join(HERE, "cad4ai.py")
 APP_HOME = os.environ.get("CAD4AI_HOME") or os.path.join(os.path.expanduser("~"), ".CAD4Ai")
 CAD_EXT = (".step", ".stp", ".stl", ".iges", ".igs", ".brep", ".3mf", ".obj")
 SKIP = {".git", "node_modules", "__pycache__", "venv", ".venv", ".CAD4Ai", "history"}
+PY_IN_CMD = re.compile(r"\"([^\"]+\.py)\"|'([^']+\.py)'|(\S+\.py)\b")
 
 
 def out(obj):
@@ -29,8 +34,9 @@ def out(obj):
 def start(_):
     out({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext":
          f'CAD4Ai local tools (heavy work on this PC, short JSON back): python "{CLI}" <summary|diff|collide|holes|dist|'
-         'section|mass|verify|doctor|std|vendor|fem|dfm|optimize|views|find> ... (skill cad-tools). '
-         'After a script exports a .step, a hook already reports diff/validity/collisions.'}})
+         'section|mass|verify|doctor|lint|new|std|vendor|fem|dfm|optimize|views|find> ... (skill cad-tools). '
+         'Hooks already report: doctor on a failing script, diff/validity/collisions/expect() after a .step export, '
+         'lint after writing a script.'}})
 
 
 def pre(ev):
@@ -66,11 +72,73 @@ def _recent_steps(cwd, since, limit=4000):
     return sorted(found, key=os.path.getmtime, reverse=True)
 
 
+def _run_cli(args, timeout=150):
+    try:
+        r = subprocess.run([sys.executable, "-B", CLI] + args, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout, creationflags=0x08000000 if os.name == "nt" else 0)
+        return r.stdout.strip() or r.stderr.strip()[-300:]
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _is_cq(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return "cadquery" in f.read()
+    except OSError:
+        return False
+
+
+def _failed_script(ev, cwd):
+    """A CadQuery script the command ran, if the command output shows a Python traceback."""
+    resp = ev.get("tool_response")
+    text = (resp if isinstance(resp, str) else json.dumps(resp, ensure_ascii=False)) + str(ev.get("error") or "")
+    if "Traceback" not in text:
+        return None
+    cmd = str((ev.get("tool_input") or {}).get("command", ""))
+    for m in PY_IN_CMD.finditer(cmd):
+        p = next(g for g in m.groups() if g)
+        p = p if os.path.isabs(p) else os.path.join(cwd, p)
+        if os.path.isfile(p) and not os.path.basename(p).startswith((".cad4ai_", "cad4ai", "cc_hook")) and _is_cq(p):
+            return p
+    return None
+
+
+def _doctor_text(script):
+    raw = _run_cli(["doctor", script], timeout=170)
+    if not raw:
+        return f"[CAD4Ai doctor] {os.path.basename(script)}: diagnosis took too long"
+    try:
+        d = json.loads(raw.splitlines()[-1])
+    except ValueError:
+        return "[CAD4Ai doctor] " + raw[-400:]
+    if d.get("ok"):
+        return None  # the failure was not in the model script
+    L = [f"[CAD4Ai doctor] {os.path.basename(script)} line {d.get('line')}: {d.get('error')}"]
+    if d.get("code"):
+        L.append(f"  code: {d['code']}")
+    L.append(f"  category: {d.get('category')}" + (f" - {d['hint']}" if d.get("hint") else ""))
+    if d.get("fix"):
+        L.append(f"  FIX: {d['fix']}")
+    if d.get("without_this_line"):
+        L.append(f"  without this line: {d['without_this_line']}")
+    if d.get("file") and os.path.abspath(d["file"]).lower() != os.path.abspath(script).lower():
+        L.append(f"  (failing line is in {d['file']})")
+    return "\n".join(L)
+
+
 def post(ev):
     cwd = ev.get("cwd") or os.getcwd()
+    event = ev.get("hook_event_name") or "PostToolUse"
     home = os.path.expanduser("~")
     if os.path.abspath(cwd).lower() in (home.lower(), os.path.abspath(os.sep).lower()):
         return
+    reports = []
+    bad = _failed_script(ev, cwd)
+    if bad:
+        t = _doctor_text(bad)
+        if t:
+            reports.append(t)
     sf = _state_file(cwd)
     try:
         with open(sf, encoding="utf-8") as f:
@@ -82,20 +150,23 @@ def post(ev):
     os.makedirs(os.path.dirname(sf), exist_ok=True)
     with open(sf, "w", encoding="utf-8") as f:
         json.dump({"t": now}, f)
-    if not steps:
-        return
-    reports = []
     for p in steps[:2]:
-        try:
-            r = subprocess.run([sys.executable, "-B", CLI, "after", p], capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=150, creationflags=0x08000000 if os.name == "nt" else 0)
-            txt = r.stdout.strip() or r.stderr.strip()[-300:]
-        except subprocess.TimeoutExpired:
-            txt = f"[CAD4Ai] {os.path.basename(p)}: check took too long; run cad4ai verify manually"
-        reports.append(txt)
+        txt = _run_cli(["after", p])
+        reports.append(txt or f"[CAD4Ai] {os.path.basename(p)}: check took too long; run cad4ai verify manually")
     if len(steps) > 2:
         reports.append(f"[CAD4Ai] +{len(steps) - 2} more changed STEP files not checked")
-    out({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "\n".join(reports)[:3000]}})
+    if reports:
+        out({"hookSpecificOutput": {"hookEventName": event, "additionalContext": "\n".join(reports)[:3500]}})
+
+
+def edit(ev):
+    p = (ev.get("tool_input") or {}).get("file_path", "")
+    if not p.lower().endswith(".py") or not os.path.isfile(p) or not _is_cq(p):
+        return
+    txt = _run_cli(["lint", p], timeout=30)
+    if txt and "no issues" not in txt:
+        out({"hookSpecificOutput": {"hookEventName": ev.get("hook_event_name") or "PostToolUse",
+                                    "additionalContext": txt[:2000]}})
 
 
 def main():
@@ -106,7 +177,7 @@ def main():
         ev = json.load(sys.stdin)
     except ValueError:
         ev = {}
-    {"start": start, "pre": pre, "post": post}.get(mode, lambda e: None)(ev)
+    {"start": start, "pre": pre, "post": post, "edit": edit}.get(mode, lambda e: None)(ev)
 
 
 if __name__ == "__main__":
