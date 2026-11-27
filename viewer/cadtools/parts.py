@@ -103,8 +103,17 @@ def _norm(t):
     return "".join(c for c in t if not unicodedata.combining(c))
 
 
-def find(query, k=6):
-    """Catalogue search (Czech or English words, a standard number or a size): -> [{family, example, source}]."""
+def find(query, k=8):
+    """Catalogue search (Czech or English words, a standard number or a size): -> [{family, title, path, example}]."""
+    from . import famreg
+    hits = famreg.find(query, k)
+    for h in _legacy_find(query, k):
+        if h["family"] in ("NEMA", "insert") and len(hits) < k:
+            hits.append(h)
+    return hits[:k]
+
+
+def _legacy_find(query, k=6):
     q = [w for w in re.split(r"[\s,;]+", _norm(query)) if w]
     size = next((w.upper() for w in q if re.fullmatch(r"m\d+(\.\d+)?", w)), None)
     out = []
@@ -177,6 +186,17 @@ def info(code):
     d = std.dims(code)
     fam = d.get("std") or ("bearing" if "bearing" in d else "NEMA" if "motor" in d else "profile" if "profile" in d else "")
     src = SOURCES.get(fam) or ("", "unverified")
+    from . import famreg
+    rf = famreg.FAMILIES.get(d.get("family") or "")
+    if rf:
+        src = (rf.source, rf.status)
+        d = {k: v for k, v in d.items() if k != "row"}
+        out = {"code": code, "family": rf.id, "title": rf.title, "path": rf.path, "dims": d, "anchors": rf.anchors(d),
+               "tools": sorted(rf.tools), "source": src[0], "status": src[1], "note": rf.note}
+        if d.get("size") in std.THREAD:
+            h = std.hole(d["size"], "all")
+            out["holes"] = {k: h[k] for k in ("clearance", "clearance_fine", "tap_drill", "cbore_d", "cbore_depth", "csk_d") if k in h}
+        return out
     if d.get("family"):  # own family (~/.CAD4Ai/library/families)
         from . import userlib
         uf = next((f for f in userlib.families() if f.get("id") == d["family"]), {})
@@ -193,7 +213,11 @@ def info(code):
     return out
 
 
-def anchors(code):
+def anchors(code, **kw):
+    from . import famreg
+    rf, d = famreg.lookup(code, kw)
+    if rf:
+        return rf.anchors(d)
     d = std.dims(code)
     s = d.get("std", "")
     if s in ("ISO 4762", "ISO 4017", "ISO 7380"):
@@ -252,13 +276,13 @@ def _frame(up):
     return axis, math.acos(dot)
 
 
-def place(code_or_wp, at=(0, 0, 0), up=(0, 0, 1), anchor=None, spin=0.0, code=None):
+def place(code_or_wp, at=(0, 0, 0), up=(0, 0, 1), anchor=None, spin=0.0, code=None, **kw):
     """A standard part (code or a Workplane from part()) moved so that its `anchor` sits on `at` and its local
     +Z axis points along `up`; `spin` [deg] turns it about that axis (hexagon / slot orientation).
     Default anchor: the screw seat, otherwise the bottom / face A / origin."""
-    wp = std.part(code_or_wp) if isinstance(code_or_wp, str) else code_or_wp
+    wp = std.part(code_or_wp, **kw) if isinstance(code_or_wp, str) else code_or_wp
     code = code_or_wp if isinstance(code_or_wp, str) else code
-    an = anchors(code) if code else {"origin": (0, 0, 0)}
+    an = anchors(code, **kw) if code else {"origin": (0, 0, 0)}
     if anchor is None:
         anchor = next((k for k in ("seat", "head_top", "bottom", "face_a", "flange", "end_a", "centre", "origin") if k in an), "origin")
     a = an.get(anchor)
@@ -309,6 +333,8 @@ class Joint:
         for role, (code, wp) in self.parts.items():
             name = f"{prefix}_{role}_" + re.sub(r"[^A-Za-z0-9.]+", "", code.replace(" ", "")).replace("ISO", "ISO")
             assy.add(wp, name=name, color=col)
+        from .screws import thread_colors
+        thread_colors(assy)
         return assy
 
     def cut(self, body, kind="clearance", depth=None):
@@ -405,5 +431,28 @@ def bolt_joint(size, grip, at=(0, 0, 0), up=(0, 0, 1), screw="ISO 4762", washer=
     return j
 
 
-def part(code):
-    return std.part(code)
+def part(code, **kw):
+    return std.part(code, **kw)
+
+
+def tool(code, kind, **kw):
+    return std.tool(code, kind, **kw)
+
+
+def cut(body, code, kind, at=(0, 0, 0), up=(0, 0, 1), anchor=None, spin=0.0, **kw):
+    """Cut a part's counterpart (std.tool kind) from `body`, placed exactly like place(code, at, up, anchor, spin):
+        plate = cut(plate, "ISO 4762 M5x16", "cbore", at=(10, 0, 8))       # counterbore + clearance hole
+        shaft = cut(shaft, "DIN 6885 A 8x7x40", "shaft", at=(0, 0, 0), up=(1, 0, 0))
+        shaft = cut(shaft, "DIN 471 20", "groove", at=(0, 0, 35))"""
+    t = std.tool(code, kind, **kw)
+    return body.cut(place(t, at=at, up=up, anchor=anchor, spin=spin, code=code))
+
+
+def apply_colors(assy):
+    return std.apply_colors(assy)
+
+
+def thread_colors(assy):
+    """Colour the thread rings of all library screws / nuts in a cq.Assembly; call right before export."""
+    from .screws import thread_colors as _tc
+    return _tc(assy)

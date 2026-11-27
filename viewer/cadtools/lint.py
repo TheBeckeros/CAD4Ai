@@ -135,7 +135,7 @@ def lint(script):
                     f"a tapped hole / nut thread is modelled at the tap drill {tap} (tap_drill(\"M{node.args[0].value:g}\"))")
             if m in ("fillet", "chamfer"):
                 before = meths[:-1]
-                if len(node.args) < 2 and not node.keywords and not any(x in ("edges", "faces") for x in before[-3:])                         and root not in ("self",):
+                if len(node.args) < 2 and not node.keywords and not any(x in ("edges", "faces", "vertices") for x in before[-3:])                         and root not in ("self",):
                     add(node.lineno, "warn", f"{m}() without an edges()/faces() selector right before it - applies to ALL edges, fails often")
                 if any(x in BOOL for x in before) or (root in had_bool and not any(x in ("box", "rect", "circle", "extrude") for x in before)):
                     add(node.lineno, "info", f"{m}() after a boolean on the same body - the most common failure; prefer filleting before cut/union or select few edges")
@@ -162,6 +162,24 @@ def lint(script):
                     add(node.lineno, "warn", f"export to {a.value} - models are exported as STEP")
                 if os.path.isabs(a.value):
                     add(node.lineno, "info", f"absolute export path {a.value} - relative to the script is portable")
+    # standard parts modelled by hand: the library has them with real geometry, colours and parts.json data
+    uses_lib = re.search(r"\b(part|place|bolt_joint)\(\s*[\"']", src) or "cadtools" in src
+    is_lib_code = re.search(r"^\s*from \.\w* import|^\s*from \. import", src, re.M) or \
+        os.path.basename(os.path.dirname(os.path.abspath(script))) == "cadtools"
+    if not uses_lib and not is_lib_code:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and _chain(node)[0][-1:] == ["polygon"] and node.args and \
+                    isinstance(node.args[0], ast.Constant) and node.args[0].value in (4, 6):
+                add(node.lineno, "warn", "hexagon / square modelled by hand - a nut or screw head? The library has it 1:1: "
+                    "part(\"ISO 4032 M8\"), part(\"ISO 4017 M8x30\") ... (cad4ai std find <words>)")
+                break
+        STDWORD = re.compile(r"(SROUB|ŠROUB|SCREW|BOLT|MATIC|NUT\b|PODLO|WASHER|LOZISK|LOŽISK|BEARING|GEAR|KOLO|PERO\b|KEY\b|KOLIK|KOLÍK|"
+                             r"PIN\b|SEGER|CIRCLIP|ORING|O-RING|IPE|HEA|HEB|UPN|PROFIL)", re.I)
+        for nm, ln in names_seen.items():
+            if STDWORD.search(nm):
+                add(ln, "warn", f"part \"{nm}\" looks like a standard part built by hand - take it from the library "
+                    f"(part / place / bolt_joint from cadtools.parts; cad4ai std find \"{nm}\")")
+                break
     seen, out = set(), []
     for it in sorted(issues, key=lambda x: (x[0], x[1])):
         if it not in seen:

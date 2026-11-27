@@ -32,6 +32,10 @@ Keep modelling natively: a Python CadQuery script that exports STEP. These tools
   thread engagement, not a collision. Clearance holes: `cad4ai std hole M4` (4.5). Name screws with their size
   (`SROUB_M4x12`, `ISO 4762 M4x12`) so the check knows the thread.
 - `part("ISO 4762 M5x16")`, `tap_drill`, `nominal` from cadtools.std instead of typed numbers.
+- Library parts are real geometry 1:1 except the thread (screws: underhead fillet, washer face, chamfers,
+  socket with drill point, thread length b by the standard; nuts: double chamfer, countersinks). The thread
+  surface is split into P/2 rings. Call `apply_colors(assy)` right before `assy.export()`: body colour by
+  family, seals / nylon inserts / balls coloured, every other thread ring dark. Never model a helix thread.
 - parts.json: missing entries are added automatically after each export (type, standard, subassembly);
   write only what cannot be guessed (material, special types).
 - Moving parts: put one word in parts.json while modelling, nothing else:
@@ -42,23 +46,32 @@ Keep modelling natively: a Python CadQuery script that exports STEP. These tools
   Optional overrides in a dict: `axis` ("X"/"-Z"/[x,y,z]), `origin`, `range` [min,max], `travel`, `on` (carrier
   part), `drive` {"part", "ratio"}, `group`. The hook prints the derived joints in one line; check it.
 
-## Standard parts: never model them, call the library (cadtools.parts)
+## Standard parts: never model them, one call from the library (cadtools.parts)
 ```python
-from cadtools.parts import place, bolt_joint, drill, info, find
-s = place("ISO 4762 M5x16", at=(10, 0, 8))            # head seated on the point, shank along -up
-b = place("6204", at=(0, 0, 30), up=(1, 0, 0))         # any part, any axis; anchor= picks the point
-j = bolt_joint("M6", grip=12, at=(-25, 0, 12))         # screw+washers+nut, stock length chosen
-j2 = bolt_joint("M6", grip=6, at=(25, 0, 12), nut=None, thread_thickness=10)   # into a thread
-plate = j.cut(plate, "clearance"); base = j2.cut(base, "tap")   # also "cbore", "csk"
-j.add_to(assy, "J1")                                   # names carry ISO no. + size (checks know them)
-plate = drill(plate, at=(0, 0, 5), d=8.0, depth=None, up=(0, 0, 1))  # any hole, any direction
+from cadtools.parts import place, cut, bolt_joint, drill, apply_colors
+s = place("DIN 933 M8x30", at=(10, 0, 8))              # any code, ISO / DIN synonyms; head seated on the point
+b = place("6204-2RS", at=(0, 0, 30), up=(1, 0, 0))     # any axis; anchor= picks the point (std info lists them)
+beam = place("IPE 200", at=(0, 0, 0), up=(1, 0, 0), L=1500)   # keyword args go to the family
+shaft = cut(shaft, "DIN 6885 A 8x7x40", "shaft", at=(0, 0, 20), up=(0, 0, 1))  # counterpart tools:
+shaft = cut(shaft, "DIN 471 20", "groove", at=(0, 0, 35))      #  screws clearance|tap|cbore|csk, keys shaft|hub,
+j = bolt_joint("M6", grip=12, at=(-25, 0, 12))         #  circlips groove, seals housing, bearings *_seat
+plate = j.cut(plate, "clearance"); j.add_to(assy, "J1")
+apply_colors(assy); assy.export("m.step")
 ```
-Families: ISO 4762/4017/10642/7380/4029 screws, ISO 4032/4035 + DIN 985 nuts, ISO 7089 washers,
-ISO 8734 pins, ball bearings (60/62/63/68/69, 6xx), NEMA motors, slot profiles, O-rings, DIN 471/472
-circlips, heat-set inserts. Unsure of the code: `cad4ai std find "zápustný M4"`; dimensions, anchors,
-holes, thread diameters and source/status: `cad4ai std info CODE`; a joint without modelling:
-`cad4ai std joint M6 12 [tapped <thickness>] [screw=ISO_10642]`. Values marked "unverified" are fine for
-layout; say so when the user needs exact catalogue values.
+Library (127 families, `cad4ai std find "<Czech or English words>"` gives the code, `std info CODE` the
+dimensions, anchors, tools, source): Šrouby - hex 4017/4014/fine 8765/8676/HV 14399-4/flange 4162, socket
+4762/7984/10642/7380, slotted 1207/1580/2009/2010, cross 7045/7046, Torx 14580/14583/14581, square DIN 478/479,
+wing DIN 316, eye DIN 580, shoulder 7379, set screws 4026-4029 / 4766, 7434-7436, studs DIN 938/939/835/940,
+rod DIN 976, self-tapping 7049/7050/1479 (ST4.2x16). Matice - 4032/4035/4033, fine 8673/8675, HV, nyloc
+7040/985/10512, all-metal 7042, cap DIN 1587/917, square 557/562, flange 6923, wing 315, coupling 6334,
+T-slot 508, KM. Podložky - 7089/7090/7092/7093, HV DIN 6916, spring DIN 127, tooth 6797/6798, tab 93/463/432,
+MB, taper 434/435, timber 436/440. Čepy - 2338/8734/8735, taper 2339, spring 8752/13337, grooved 8740,
+rivets 1051/661/15977, clevis 2341 A/B, split pin 1234, fork DIN 71752. Pera DIN 6885 A/B/C, Woodruff 6888.
+Kroužky DIN 471/472/6799. Těsnění O-ring, DIN 3760, DIN 7603. Profily IPE/HEA/HEB/HEM/IPN/UPN/UPE, L, RHS/SHS/
+CHS, FL, KR, ICUSTOM, ALU 4040. Ložiska 60/62/63/618/619/6xx (-2RS/-2Z), 72/73 B, 12/22, 511/512, NU/NJ/N,
+302/303/322, HK. Převody GEAR m z b d [beta x] (involute), RACK, SPROCKET 08B-1 z17; gear_pair() in
+cadtools.lib_gears. Values are "unverified" (typed from general knowledge; profiles checked by kg/m): fine
+for design, say so when the user needs exact catalogue values.
 
 ## Growing the library
 - After an export the hook may report `[library] candidate '<title>' ...`: parts the library lacks (profiles,

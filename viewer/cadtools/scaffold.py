@@ -41,7 +41,11 @@ def guess(inst):
         L = dims.get("L")
         if s or size:
             d["standard"] = " ".join(x for x in (s, f"{size}x{L:g}" if (size and L) else str(size)) if x).strip()
-        if "bearing" in dims:
+        if dims.get("family") and dims.get("type"):  # registry family knows its type and code
+            d["type"] = dims["type"]
+            if dims.get("std_code"):
+                d["standard"] = dims["std_code"]
+        elif "bearing" in dims:
             d["type"] = "bearing"
         elif s.startswith("ISO 3601"):
             d["type"] = "seal"

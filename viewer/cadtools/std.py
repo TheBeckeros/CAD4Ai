@@ -151,8 +151,22 @@ def key_for(shaft_d):
     raise ValueError("shaft out of 6..95 mm")
 
 
-def dims(code):
-    """Dimensions of a standard part from its code."""
+def dims(code, **kw):
+    """Dimensions of a standard part from its code (registry families first, see famreg / lib_*.py)."""
+    from . import famreg
+    fam, d = famreg.lookup(code, kw)
+    if fam:
+        return d
+    return _legacy_dims(code)
+
+
+def family(code, **kw):
+    """(Family, dims) of a code or (None, None)."""
+    from . import famreg
+    return famreg.lookup(code, kw)
+
+
+def _legacy_dims(code):
     c = code.upper().replace(" ", "")
     m, L = _m(code), _len(code)
     if "4762" in c or "912" in c:
@@ -160,7 +174,8 @@ def dims(code):
         return {"std": "ISO 4762", "size": m, "L": L, "head_d": dk, "head_h": k, "socket": s, "socket_depth": t}
     if "4017" in c or "4014" in c or "933" in c or "931" in c:
         s, k = ISO4017[m]
-        return {"std": "ISO 4017", "size": m, "L": L, "s": s, "head_h": k, "e": round(s / 0.866, 2)}
+        form = "ISO 4014" if ("4014" in c or "931" in c) else "ISO 4017"
+        return {"std": "ISO 4017", "form": form, "size": m, "L": L, "s": s, "head_h": k, "e": round(s / 0.866, 2)}
     if "10642" in c or "7991" in c:
         dk, k, s = ISO10642[m]
         return {"std": "ISO 10642", "size": m, "L": L, "head_d": dk, "head_h": k, "socket": s, "angle": 90}
@@ -176,7 +191,8 @@ def dims(code):
         d1, d2, h = ISO7089[m]
         return {"std": "ISO 7089", "size": m, "d1": d1, "d2": d2, "h": h}
     if "4026" in c or "4027" in c or "4029" in c or "913" in c:
-        return {"std": "ISO 4029", "size": m, "L": L, "socket": SETSCREW[m]}
+        point = "flat" if ("4026" in c or "913" in c) else "cone" if "4027" in c else "cup"
+        return {"std": "ISO 4029", "point": point, "size": m, "L": L, "socket": SETSCREW[m]}
     if "2338" in c or "8734" in c or c.startswith("PIN") or "6325" in c:
         d = float(re.search(r"(\d+(?:\.\d+)?)[xX×]", code).group(1))
         return {"std": "ISO 8734", "d": d, "L": L}
@@ -219,11 +235,54 @@ def _hexagon(cq, s, h):
     return cq.Workplane("XY").polygon(6, s / 0.8660254).extrude(h)
 
 
-def part(code):
-    """CadQuery Workplane of a standard part. Screws: head bottom at Z=0, head +Z, shank -Z."""
+_PARTS = {}  # (code, kwargs) -> Workplane: the same part built once per run
+
+
+def part(code, **kw):
+    """CadQuery Workplane of a standard part from its code, e.g. part("DIN 933 M8x30"), part("IPE 200", L=1500),
+    part("6204-2RS"), part("GEAR m2 z30 b20 d12"). Frames: see each family (screws: seat at Z=0, shank -Z).
+    Keyword arguments go to the family (L, b, bore, hub_d ...). Call apply_colors(assy) before export."""
+    from . import famreg
+    key = (famreg.norm(code), tuple(sorted(kw.items())))
+    if key in _PARTS:
+        return _PARTS[key]
+    fam, d = famreg.lookup(code, kw)
+    if fam:
+        w = fam.build(d)
+        _PARTS[key] = w
+        return w
+    return _legacy_part(code)
+
+
+def tool(code, kind, **kw):
+    """Counterpart geometry in the part's own frame, to cut from the mating part after placing it like the part:
+    screws clearance | tap | cbore | csk, keys shaft | hub, circlips groove, seals housing, bearings shaft_seat |
+    housing_seat, O-rings groove_shaft | groove_face, pins hole. parts.cut() does the placing for you."""
+    from . import famreg
+    fam, d = famreg.lookup(code, kw)
+    if not fam:
+        raise ValueError(f"unknown part code: {code}")
+    if kind not in fam.tools:
+        raise ValueError(f"{fam.id}: no tool '{kind}' (have {', '.join(sorted(fam.tools)) or 'none'})")
+    return fam.tools[kind](d)
+
+
+def apply_colors(assy):
+    """Library colours for a cq.Assembly: body colour, seals / inserts, every other thread ring dark. Call before export."""
+    from .famreg import apply_colors as _ac
+    return _ac(assy)
+
+
+def _legacy_part(code):
     import cadquery as cq
     d = dims(code)
     std = d.get("std", "")
+    if std in ("ISO 4762", "ISO 4017", "ISO 10642", "ISO 7380", "ISO 4029") and d.get("L"):
+        from . import screws  # real geometry, thread as P/2 rings (screws.thread_colors colours them)
+        return screws.screw(d)
+    if std in ("ISO 4032", "ISO 4035"):
+        from . import screws
+        return screws.nut(d)
     if "L" in d and d.get("size"):
         nom = float(d["size"][1:])
     if std == "ISO 4762":
@@ -295,19 +354,42 @@ def part(code):
         return userlib.part(code)
 
 
+def thread_colors(assy):
+    """Colour the thread rings of all library screws / nuts in a cq.Assembly (dark every other P/2 ring, body
+    metal); call right before assy.export(). See screws.py."""
+    from .screws import thread_colors as _tc
+    return _tc(assy)
+
+
 def step_file(code):
     """Cached STEP of a standard part -> path."""
     from . import core
     import cadquery as cq
+    from .famreg import apply_colors as _ac
     safe = re.sub(r"[^A-Za-z0-9.]+", "_", code.strip())
-    p = os.path.join(core.CACHE, "std", safe + ".step")
+    p = os.path.join(core.CACHE, "std", safe + ".v3.step")  # v3: registry families, colours
     if not os.path.isfile(p):
         os.makedirs(os.path.dirname(p), exist_ok=True)
-        cq.exporters.export(part(code), p)
+        assy = cq.Assembly(name=safe)
+        assy.add(part(code), name=code.strip())
+        _ac(assy)
+        assy.export(p)
     return p
 
 
 def catalogue():
+    """Library overview: category -> [family id: title, example]."""
+    from . import famreg
+    out = {}
+    for f in famreg.tree():
+        top = f["path"].split("/")[0]
+        out.setdefault(top, []).append(f"{f['id']}: {f['title']} - e.g. {f['example']}")
+    out["Other (legacy)"] = ["NEMA17 x48 (stepper motor)", "insert M3 (heat-set insert)", "hole M5 [clearance|tap|cbore|csk|all]",
+                            "key <shaft d> (key size for a shaft)"]
+    return out
+
+
+def _legacy_catalogue():
     return {"screws": ["ISO 4762 Mx L (socket cap)", "ISO 4017 Mx L (hex)", "ISO 10642 (countersunk)", "ISO 7380 (button)",
                        "ISO 4029 (set screw)"], "threads": sorted(THREAD, key=lambda s: float(s[1:])),
             "nuts": ["ISO 4032", "ISO 4035 (thin)"], "washers": ["ISO 7089"], "pins": ["ISO 8734 d x L"],

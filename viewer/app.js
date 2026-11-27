@@ -3623,6 +3623,7 @@ $('bSettings').onclick = async () => { await loadSettings(); renderSettings(); $
 
 // ---- Settings tabs: everything the plugin contains (libraries, candidates, rules, tools, skills, data)
 let plugCat = null, libSel = null;
+const libOpen = new Set();   // open categories of the library tree
 const stBadge = st => `<span class="badge ${({ verified: 'ok', formula: 'info', vendor: 'warn', unverified: 'warn' })[st] || ''}">${esc(st || '?')}</span>`;
 const lvBadge = lv => `<span class="badge ${({ mandatory: 'bad', check: 'info', default: 'ok', convention: 'warn' })[lv] || ''}">${esc(lv)}</span>`;
 async function loadCatalog(force) {
@@ -3647,7 +3648,8 @@ document.querySelectorAll('#setTabs button').forEach(b => b.onclick = async () =
   try { await loadCatalog(); SET_RENDER[b.dataset.st](); }
   catch (e) { $('sp-' + b.dataset.st).innerHTML = `<div class="muted">Could not load: ${esc(e.message)}</div>`; }
 });
-function famCode(f, row) {
+function famCode(f, row, i) {
+  if (f.codes) return f.codes[i ?? f.rows.indexOf(row)] || null;   // registry families: the server checked each code
   const k = String(row[0]);
   if (/^M\d/.test(k) && /M\d/.test(f.example)) return f.example.replace(/M\d+(\.\d+)?/, k);
   if (f.id === 'bearing') return k;
@@ -3659,9 +3661,31 @@ function famCode(f, row) {
 }
 function renderLibs() {
   const q = ($('libQ').value || '').toLowerCase();
-  const fams = plugCat.libraries.filter(f => !q || (f.title + ' ' + f.id + ' ' + f.aliases + ' ' + f.example + ' ' + f.rows.map(r => r[0]).join(' ')).toLowerCase().includes(q));
-  $('libList').innerHTML = fams.map(f => `<div class="libitem ${libSel === f.id ? 'on' : ''}" data-id="${esc(f.id)}"><span class="t">${esc(f.title)}</span>${f.origin === 'user' ? '<span class="badge info">own</span>' : ''}${stBadge(f.status)}</div>`).join('')
-    + `<div style="margin-top:10px"><button class="ghost" id="libNew">+ Own family…</button></div>`;
+  const norm = s => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const words = norm(q).split(/\s+/).filter(Boolean);
+  const fams = plugCat.libraries.filter(f => {
+    const hay = norm([f.title, f.id, f.path || '', f.aliases, f.example, f.rows.map(r => r[0]).join(' ')].join(' '));
+    return words.every(w => hay.includes(w));
+  });
+  // tree: category (first path segment) > sub-folder > families, as in CAD part libraries
+  const groups = new Map();
+  for (const f of fams) {
+    const [top, ...rest] = String(f.path || 'Ostatní').split('/');
+    const sub = rest.join(' / ');
+    if (!groups.has(top)) groups.set(top, new Map());
+    const g = groups.get(top);
+    if (!g.has(sub)) g.set(sub, []);
+    g.get(sub).push(f);
+  }
+  const item = f => `<div class="libitem ${libSel === f.id ? 'on' : ''}" data-id="${esc(f.id)}" style="padding-left:18px"><span class="t">${esc(f.title)}</span>${f.origin === 'user' ? '<span class="badge info">own</span>' : ''}${stBadge(f.status)}</div>`;
+  $('libList').innerHTML = [...groups].map(([top, subs]) => {
+    const n = [...subs.values()].reduce((a, l) => a + l.length, 0);
+    const open = words.length || libOpen.has(top) || [...subs.values()].some(l => l.some(f => f.id === libSel));
+    return `<details class="libcat" data-top="${esc(top)}" ${open ? 'open' : ''}><summary style="cursor:pointer;font-weight:600;padding:4px 2px">${esc(top)} <span class="muted">(${n})</span></summary>`
+      + [...subs].map(([sub, list]) => (sub ? `<div class="muted" style="padding:4px 2px 2px 8px;font-size:11px">${esc(sub)}</div>` : '') + list.map(item).join('')).join('')
+      + `</details>`;
+  }).join('') + `<div style="margin-top:10px"><button class="ghost" id="libNew">+ Own family…</button></div>`;
+  $('libList').querySelectorAll('details.libcat').forEach(el => el.ontoggle = () => { if (el.open) libOpen.add(el.dataset.top); else libOpen.delete(el.dataset.top); });
   $('libList').querySelectorAll('.libitem').forEach(el => el.onclick = () => { libSel = el.dataset.id; renderLibs(); });
   $('libNew').onclick = async () => {
     const id = prompt('Id of the new family (e.g. alu30, hinge_small):'); if (!id) return;
@@ -3669,22 +3693,24 @@ function renderLibs() {
   };
   const f = plugCat.libraries.find(x => x.id === libSel);
   if (!f) { $('libMain').innerHTML = `<div class="muted">${plugCat.libraries.length} families. Pick one on the left, or search. Claude calls them by code, e.g. <span class="mono">place("ISO 4762 M5x16", at=…)</span>.</div>`; return; }
-  const code3d = f.rows.length ? famCode(f, f.rows[0]) : f.example;
+  const code3d = f.codes ? f.example : (f.rows.length ? famCode(f, f.rows[0], 0) : f.example);
   $('libMain').innerHTML = `<div class="row" style="margin:0;gap:8px;align-items:center"><b>${esc(f.title)}</b>${stBadge(f.status)}${f.origin === 'user' ? '<span class="badge info">own family</span>' : ''}</div>
+    ${f.path ? `<div class="muted" style="margin-top:2px">${esc(f.path.replace(/\//g, ' › '))}</div>` : ''}
+    <div class="mono" style="margin-top:6px;font-size:11.5px">part("${esc(f.example)}")${f.tools?.length ? ` · tools: ${f.tools.map(esc).join(', ')}` : ''}</div>
     <div class="muted" style="margin-top:4px">Source: ${esc(f.source || '—')}</div>
     ${f.note ? `<div class="muted" style="margin-top:4px">${esc(f.note)}</div>` : ''}
     ${f.file ? `<div class="muted mono" style="margin-top:4px">${esc(f.file)}</div>` : ''}
     <div class="row" style="margin:8px 0 0;gap:6px"><input id="libCode" value="${esc(code3d || '')}" style="flex:1" placeholder="code, e.g. ${esc(f.example)}"><button class="ghost" id="libInfo">Info</button><button class="primary" id="libOpen">Open in 3D</button></div>
     <div id="libOut"></div>
     <table class="ptable"><thead><tr>${f.columns.map(c => `<th>${esc(c)}</th>`).join('')}<th></th></tr></thead><tbody>
-    ${f.rows.map((r, i) => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join('')}<td>${famCode(f, r) ? `<button class="ghost" data-row="${i}">3D</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
+    ${f.rows.map((r, i) => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join('')}<td>${famCode(f, r, i) ? `<button class="ghost" data-row="${i}">3D</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
   const open = async code => { try { await plugAct({ action: 'open-part', code }); toast('Opened ' + code + ' as a model tab.'); } catch (e) { toast(e.message, true); } };
   $('libOpen').onclick = () => open($('libCode').value.trim());
   $('libInfo').onclick = async () => {
     try { const r = await plugAct({ action: 'part-info', code: $('libCode').value.trim() }); $('libOut').innerHTML = `<div class="pinfo">${esc(JSON.stringify(r.info, null, 1))}</div>`; }
     catch (e) { $('libOut').innerHTML = `<div class="pinfo">${esc(e.message)}</div>`; }
   };
-  $('libMain').querySelectorAll('[data-row]').forEach(b => b.onclick = () => open(famCode(f, f.rows[+b.dataset.row])));
+  $('libMain').querySelectorAll('[data-row]').forEach(b => b.onclick = () => open(famCode(f, f.rows[+b.dataset.row], +b.dataset.row)));
 }
 $('libQ').oninput = () => { if (plugCat) renderLibs(); };
 function renderCands() {

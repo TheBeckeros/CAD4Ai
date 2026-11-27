@@ -55,11 +55,18 @@ def libraries():
         _fam("insert", "Heat-set inserts (3D print)", ["size", "hole d", "outer d", "length"], [[k, *v] for k, v in parts.INSERT.items()],
              "insert M3", "insert", "Makers differ: take the hole size from your insert's data sheet."),
     ]
+    keep = {"thread", "NEMA", "insert"}       # legacy tables not (yet) in the registry
+    fams = [f for f in fams if f["id"] in keep]
+    paths = {"thread": "Závity a díry", "NEMA": "Elektro/Krokové motory", "insert": "Konstrukční prvky/Zalisovací vložky"}
     for f in fams:
         f["origin"] = "built-in"
+        f["path"] = paths.get(f["id"], "Ostatní")
+    from . import famreg
+    fams = famreg.tree() + fams
     from . import userlib
     for uf in userlib.families(True):
-        fams.append({"id": uf.get("id"), "title": uf.get("title", uf.get("id")), "columns": uf.get("columns", []),
+        fams.append({"id": uf.get("id"), "title": uf.get("title", uf.get("id")), "path": "Vlastní/" + str(uf.get("title", uf.get("id"))),
+                     "columns": uf.get("columns", []),
                      "rows": uf.get("rows", []), "example": uf.get("example", ""), "source": uf.get("source", ""),
                      "status": uf.get("status", "unverified"), "note": uf.get("note", ""), "aliases": uf.get("aliases", ""),
                      "origin": "user", "file": uf.get("_file"), "broken": uf.get("broken", False)})

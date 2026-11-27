@@ -300,7 +300,8 @@ def cmd_std(a):
                    "use": "j = bolt_joint(...); body = j.cut(body, 'clearance'|'tap'|'cbore'|'csk'); j.add_to(assy, 'J1')"})
         return
     code = " ".join(args)
-    out = {"ok": True, "code": code, "dims": std.dims(code),
+    d = {k: v for k, v in std.dims(code).items() if k != "row"}
+    out = {"ok": True, "code": code, "dims": d,
            "use": f'import os, sys; sys.path.insert(0, os.path.expanduser("~/.CAD4Ai/lib")); '
                   f'from cadtools.parts import place; s = place("{code}", at=(x, y, z), up=(0, 0, 1))'}
     if a.step:
