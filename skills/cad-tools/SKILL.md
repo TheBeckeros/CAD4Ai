@@ -37,8 +37,12 @@ Keep modelling natively: a Python CadQuery script that exports STEP. These tools
   `"DRAWER": {"motion": "slide"}` (keys are name prefixes, so one line covers all buttons).
   The PC derives axis, pivot, stroke and limits from the geometry and writes `<model>.motion.json` after every
   rebuild (also when the user changes a parameter in the viewer): no motion file to write, no tokens.
-  Optional overrides in a dict: `axis` ("X"/"-Z"/[x,y,z]), `origin`, `range` [min,max], `travel`, `on` (carrier
-  part), `drive` {"part", "ratio"}, `group`. The hook prints the derived joints in one line; check it.
+  Optional overrides in a dict: `axis` ("X"/"-Z"/[x,y,z]), `origin`, `range` [min,max], `travel`, `max`, `on`
+  (carrier part), `drive` {"part", "ratio"}, `group`. The hook prints the derived joints in one line; check it.
+  Doors and lids: `"with": ["DOOR_"]` carries the leaf, lock, screws, seal (or give them the door's own
+  `subassembly`); `"home": 80` when the STEP is exported open; `"pin": "HINGE_PIN"` only if the axis comes out
+  wrong (it is found from the knuckle bore on the fixed pin). Buttons: put `press` on the cap, not the switch.
+  All solids of one part (`KNOB#1`, `KNOB#2`) move as one joint.
 
 ## Standard parts: never model them, call the library (cadtools.parts)
 ```python

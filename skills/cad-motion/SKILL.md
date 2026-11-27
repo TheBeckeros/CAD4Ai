@@ -13,8 +13,11 @@ the viewer's **Motion** tab joint sliders, Play / Pause, scrubbing and the joint
 **Cheapest first:** buttons, knobs, wheels, lids/doors and drawers need no motion file. Add
 `"motion": "press" | "rotate" | "hinge" | "slide"` to those parts in `<model>.parts.json`; the PC
 generates `<model>.motion.json` (axes, strokes, collision limits, animations) and regenerates it after every
-rebuild (`cad4ai motion M.step` runs it at once). Write joints by hand below only for linkages, gears,
-closed loops or where the generated joint is wrong; a hand-written file (no `"generated"` key) is never overwritten.
+rebuild (`cad4ai motion M.step` runs it at once). A door that moves with its hinge leaf, lock and screws:
+`{"motion": {"type": "door", "with": ["DOOR_"], "home": 80}}` (`home` = the angle the STEP was exported at;
+the axis comes from the knuckle bore on the fixed pin, `"pin": "<prefix>"` forces it). Press goes on the
+button cap. Write joints by hand below only for linkages, gears, closed loops or where the generated joint is
+wrong; a hand-written file (no `"generated"` key) is never overwritten.
 
 Start with the geometry dump instead of writing your own inspection code:
 ```
