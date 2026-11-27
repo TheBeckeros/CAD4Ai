@@ -99,19 +99,9 @@ def make_copy(script, values=None, transform=None):
 
 
 def set_params(src, values):
-    """Replace top-level UPPER_CASE = <number> values in the source text."""
-    for name, val in values.items():
-        pat = re.compile(rf"^({re.escape(name)}\s*=\s*)([-+]?[\d.eE+-]+|True|False)(.*)$", re.M)
-        if isinstance(val, bool):
-            txt = "True" if val else "False"
-        elif isinstance(val, int):
-            txt = str(val)
-        else:
-            txt = repr(float(val))
-        src, n = pat.subn(lambda m: m.group(1) + txt + m.group(3), src, count=1)
-        if not n:
-            raise ValueError(f"parameter {name} not found as a plain number at the top of the script")
-    return src
+    """New values of top-level parameters - the same parser and rewrite as the viewer's Parameters tab."""
+    from .params import set_in_source
+    return set_in_source(src, values)
 
 
 def run(script, values=None, transform=None, env=None, timeout=900, keep=False):

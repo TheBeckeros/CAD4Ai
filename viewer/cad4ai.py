@@ -27,6 +27,8 @@ import json
 import os
 import sys
 
+sys.dont_write_bytecode = True  # no __pycache__ inside the app folder
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
@@ -61,13 +63,31 @@ def cmd_diff(a):
 
 
 def _expect_result(step):
+    """Text of the expect() checks the script ran for this exact file version, and its deferred rules."""
     from cadtools import expect
     try:
         with open(expect.result_file(step), encoding="utf-8") as f:
             r = json.load(f)
-        return r["text"] if r.get("key") == core.file_key(step) else None
+        return r if r.get("key") == core.file_key(step) else None
     except (OSError, ValueError, KeyError):
         return None
+
+
+def _coll_line(c):
+    extra = []
+    if c["expected_fastener_overlaps"]:
+        extra.append(f"{c['expected_fastener_overlaps']} thread engagements (expected)")
+    if c.get("expected_flexible_contacts"):
+        extra.append(f"{c['expected_flexible_contacts']} cable/strap contacts ignored")
+    if c.get("self_overlaps"):
+        so = c["self_overlaps"]
+        extra.append(f"{len(so)} parts made of overlapping solids ({', '.join(list(so)[:3])})")
+    tail = (f"; {'; '.join(extra)}" if extra else "")
+    if c["collisions"]:
+        return (f"COLLISIONS ({len(c['collisions'])}): " + "; ".join(
+            f"{x['a']} x {x['b']} {x['overlap_mm3']} mm3 @{x['at']}" + (f" ({x['note']})" if x.get("note") else "")
+            for x in c["collisions"][:8]) + tail)
+    return f"collisions: none ({c['pairs_checked']} pairs, {c.get('pairs_reused', 0)} reused{tail})"
 
 
 def cmd_after(a):
@@ -77,13 +97,14 @@ def cmd_after(a):
     prev = digest.previous(a.step)
     digest.remember(a.step, d)
     L = [f"[CAD4Ai] {os.path.basename(a.step)}: {d['parts_n']} parts, {d['size']} mm, {d['mass_g']} g"]
-    diff_lines = digest.diff(prev, d)
+    diff_lines = digest.diff(prev, d) if prev else []
     L += ["  " + x for x in diff_lines[:15]]
     if d["invalid"]:
         L.append("  INVALID B-rep: " + ", ".join(d["invalid"][:10]))
     ex = _expect_result(a.step)
+    deferred = (ex or {}).get("deferred") or []
     if ex:
-        L += ["  " + x for x in ex.splitlines()]
+        L += ["  " + x for x in ex["text"].splitlines()]
     try:
         from cadtools import guard
         L += ["  " + x for x in guard.check(a.step, diff_lines, d["parts_n"])]
@@ -98,13 +119,27 @@ def cmd_after(a):
         pass
     if d["parts_n"] > 1 and d["parts_n"] <= a.max_parts:
         c = collide.check(a.step, 0.0)
-        if c["collisions"]:
-            L.append(f"  COLLISIONS ({len(c['collisions'])}): " + "; ".join(
-                f"{x['a']}×{x['b']} {x['overlap_mm3']} mm3 @{x['at']}" for x in c["collisions"][:8]))
-        else:
-            L.append(f"  collisions: none ({c['pairs_checked']} pairs" +
-                     (f", {c['expected_fastener_overlaps']} fastener overlaps ignored" if c["expected_fastener_overlaps"] else "") + ")")
+        L.append("  " + _coll_line(c))
+        # expect(...).no_collisions() rules are checked here (parallel, incremental) instead of in the script
+        for rule in deferred:
+            names = None if rule["names"] == ["*"] else rule["names"]
+            cc = c if not names else collide.check(a.step, 0.0, names)
+            bad = cc["collisions"] + ([] if rule.get("ignore", True) else cc["fastener_overlaps"])
+            tag = ",".join(rule["names"]) + ".no_collisions"
+            L.append(f"  [expect] {'OK' if not bad else 'FAIL'} {tag}" +
+                     ("" if not bad else ": " + "; ".join(f"{x['a']} x {x['b']} {x['overlap_mm3']} mm3" for x in bad[:6])))
+    elif deferred:
+        L.append(f"  [expect] no_collisions not checked: {d['parts_n']} parts > --max-parts {a.max_parts}")
     _text(L)
+
+
+def cmd_check(a):
+    """The viewer's after-rebuild check (validity + volumes), from the shared digest cache."""
+    from cadtools import digest
+    d = digest.digest(a.step)
+    core.emit({"ok": True, "parts": d["parts_n"], "invalid": d["invalid"],
+               "volume": core.r(sum(p["vol"] for p in d["parts"]), 1),
+               "vols": {p["name"]: p["vol"] for p in d["parts"]}, "seconds": d.get("seconds", 0)})
 
 
 def cmd_lint(a):
@@ -184,7 +219,11 @@ def cmd_verify(a):
 
 def cmd_doctor(a):
     from cadtools import doctor
-    core.emit(doctor.diagnose(a.script, a.workers))
+    tb = None
+    if a.traceback_file:
+        with open(a.traceback_file, encoding="utf-8", errors="replace") as f:
+            tb = f.read()
+    core.emit(doctor.diagnose(a.script, a.workers, tb))
 
 
 def cmd_std(a):
@@ -201,7 +240,8 @@ def cmd_std(a):
         return
     code = " ".join(args)
     out = {"ok": True, "code": code, "dims": std.dims(code),
-           "use": f'import sys; sys.path.insert(0, r"{HERE}"); from cadtools.std import part; s = part("{code}")'}
+           "use": f'import os, sys; sys.path.insert(0, os.path.expanduser("~/.CAD4Ai/lib")); '
+                  f'from cadtools.std import part; s = part("{code}")'}
     if a.step:
         out["step"] = std.step_file(code)
     core.emit(out)
@@ -260,7 +300,8 @@ def main(argv=None):
     s.add_argument("--json", action="store_true")
     add("diff", cmd_diff, "step")
     s = add("after", cmd_after, "step")
-    s.add_argument("--max-parts", type=int, default=150)
+    s.add_argument("--max-parts", type=int, default=5000)
+    add("check", cmd_check, "step")
     s = add("lint", cmd_lint, "script")
     s.add_argument("--info", action="store_true")
     s = add("new", cmd_new, "script")
@@ -282,6 +323,7 @@ def main(argv=None):
     s.add_argument("--max-parts", type=int, default=12)
     s = add("doctor", cmd_doctor, "script")
     s.add_argument("--workers", type=int)
+    s.add_argument("--traceback-file", help="the failure already seen; skips re-running the script to see it")
     s = add("std", cmd_std)
     s.add_argument("args", nargs="*")
     s.add_argument("--step", action="store_true", help="also write a cached STEP")
@@ -316,6 +358,11 @@ def main(argv=None):
     s.add_argument("query", nargs="+")
     s.add_argument("-k", type=int, default=6)
     a = p.parse_args(argv)
+    try:
+        from cadtools import install
+        install.sync()  # ~/.CAD4Ai/lib follows this plugin version (model scripts import from there)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         a.fn(a)
     except SystemExit:

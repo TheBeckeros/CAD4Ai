@@ -85,7 +85,8 @@ STEP is exported. Revolute values are in degrees (right-hand rule about `axis`);
 1. Every name in `parts`, `parent` and `drive.joint` exists. The Motion tab lists anything that
    does not match in red.
 2. Rotating to `min` and `max` does not cause a collision with the rest of the assembly.
-   If unsure, check with `solid.intersect(other).Volume()` at both limits in the script.
+   If unsure, export the assembly at both limits and run `cad4ai collide <step> --limit 0` (skill
+   cad-tools): exact, all cores, cables and screw threads already filtered.
 3. Reply with a table: joint, type, parts, range, and how you derived it (e.g. "pin Ø6 in hole Ø6.4, coaxial").
 
 Selection, measurement and pen notes in the viewer always work in the home pose: the viewer

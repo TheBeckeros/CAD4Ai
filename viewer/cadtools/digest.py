@@ -259,7 +259,30 @@ def _digest_worker(args):
     return [part_digest(i, detail) for i in sel]
 
 
-def digest(step, detail=True, parallel=True):
+def _incremental(step, model, detail):
+    """Per-part digests; a part whose fingerprint (volume, area, centre, box) is unchanged since the
+    previous version of this model is copied from there instead of measured again."""
+    from . import collide
+    pf = os.path.join(core.CACHE, "digest_parts", core.model_key(step.split("@", 1)[0]) + f"_{int(detail)}.json")
+    try:
+        with open(pf, encoding="utf-8") as f:
+            old = json.load(f)
+        old = old["parts"] if old.get("v") == core.TOOLS_VERSION else {}
+    except (OSError, ValueError, KeyError):
+        old = {}
+    new, parts = {}, []
+    for i in model:
+        fp = collide.fingerprint(i) + "|" + i.name + "|" + str(i.info)
+        p = old.get(fp) or part_digest(i, detail)
+        new[fp] = p
+        parts.append(p)
+    os.makedirs(os.path.dirname(pf), exist_ok=True)
+    with open(pf, "w", encoding="utf-8") as f:
+        json.dump({"v": core.TOOLS_VERSION, "parts": new}, f, ensure_ascii=False)
+    return parts
+
+
+def digest(step, detail=True, parallel=False):
     def go():
         model = core.load(step)
         names = [i.name for i in model]
@@ -272,7 +295,7 @@ def digest(step, detail=True, parallel=True):
             order = {n: i for i, n in enumerate(names)}
             parts.sort(key=lambda p: order[p["name"]])
         else:
-            parts = [part_digest(i, detail) for i in model]
+            parts = _incremental(step, model, detail)
         allbb = [min(p["min"][0] for p in parts), min(p["min"][1] for p in parts), min(p["min"][2] for p in parts),
                  max(p["max"][0] for p in parts), max(p["max"][1] for p in parts), max(p["max"][2] for p in parts)]
         return {"ok": True, "model": os.path.basename(step), "parts_n": len(parts),

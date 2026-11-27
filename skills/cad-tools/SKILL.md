@@ -9,6 +9,10 @@ Keep modelling natively: a Python CadQuery script that exports STEP. These tools
 
 ## Writing a model script
 - New model: `cad4ai new model.py` writes a skeleton (parameter block, assembly, export, imports below).
+- Import the helpers from the stable copy, never from the plugin folder (its path has a version in it):
+  `import os, sys; sys.path.insert(0, os.path.expanduser("~/.CAD4Ai/lib"))`.
+- Parameters stay plain numbers with a comment (`HOLE = 5.5  # clearance M5 [mm] 3..20`); a computed value
+  (`hole("M5")[...]`) is not editable in the viewer - look the number up with `cad4ai std hole M5` instead.
 - At the end of the script state the intent; it is checked on the exported STEP after every run:
   ```python
   from cadtools.expect import expect
@@ -17,10 +21,15 @@ Keep modelling natively: a Python CadQuery script that exports STEP. These tools
   expect("bolt").count(4); expect("lid").inside(zmax=120); expect.no_collisions()
   ```
   Write expect() lines for every dimension or relation the user asked for. A FAIL means the model is wrong
-  even though the script ran.
+  even though the script ran. Size/hole/mass/clearance rules run at the end of the script (only the named
+  parts are measured); `no_collisions()` is checked by the hook after the export (all cores, incremental).
 - `@cached_part` (from cadtools.cache) on functions that build a finished part: unchanged parts load from
   disk in milliseconds on the next run (key = source + arguments + every global/parameter they use).
-- `hole("M5")["clearance"]`, `part("ISO 4762 M5x16")` from cadtools.std instead of typed numbers.
+- Threads (convention, always): screw / stud / external thread = NOMINAL diameter (M4 -> 4.0); tapped hole /
+  nut / internal thread = TAP DRILL hole (M4 -> 3.3, `tap_drill("M4")`). Their overlap is then an expected
+  thread engagement, not a collision. Clearance holes: `cad4ai std hole M4` (4.5). Name screws with their size
+  (`SROUB_M4x12`, `ISO 4762 M4x12`) so the check knows the thread.
+- `part("ISO 4762 M5x16")`, `tap_drill`, `nominal` from cadtools.std instead of typed numbers.
 - parts.json: missing entries are added automatically after each export (type, standard, subassembly);
   write only what cannot be guessed (material, special types).
 
@@ -28,7 +37,9 @@ Keep modelling natively: a Python CadQuery script that exports STEP. These tools
 - Script run fails -> doctor result arrives with the tool output: failing line, cause, a value that works.
   Apply it instead of guessing.
 - A .step changed -> diff, validity, expect() results, collisions, unexpected changes (parts that changed
-  although the parameters driving them did not).
+  although the parameters driving them did not). Not counted as collisions (listed apart): solids of one
+  part overlapping each other, cables/straps/hoses, a thread engagement (screw at nominal diameter in a
+  tap-drill hole or nut). A screw through material with no hole, or in a hole smaller than the tap drill, IS reported. This covers the "always run the collision check" rule: no own check needed.
 - A CadQuery script was written/edited -> lint warnings (duplicate names, fillet without selector,
   hole(5) for M5, parameters without comment/unit, unused parameters).
 

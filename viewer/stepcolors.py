@@ -9,6 +9,8 @@ colours stored on the shape itself, so those parts lost their colour in the view
 import json
 import sys
 
+sys.dont_write_bytecode = True  # no __pycache__ inside the app folder
+
 
 def read_colors(path):
     from OCP.STEPCAFControl import STEPCAFControl_Reader

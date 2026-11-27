@@ -16,6 +16,8 @@ import json
 import math
 import sys
 
+sys.dont_write_bytecode = True  # no __pycache__ inside the app folder
+
 
 def load_parts(step):
     """[(name, cq.Shape)] in the STEP's assembly order, with locations applied (XCAF)."""

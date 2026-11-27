@@ -17,6 +17,8 @@ import os
 import re
 import subprocess
 import sys
+
+sys.dont_write_bytecode = True  # no __pycache__ inside the app folder
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -31,12 +33,63 @@ def out(obj):
     sys.stdout.write(json.dumps(obj, ensure_ascii=False))
 
 
-def start(_):
+def _is_cad_folder(cwd, limit=3000):
+    """A folder with STEP files or CadQuery scripts (top two levels); elsewhere the hooks stay silent."""
+    seen = 0
+    base = cwd.rstrip("\\/").count(os.sep)
+    for root, dirs, files in os.walk(cwd):
+        dirs[:] = [d for d in dirs if d not in SKIP and not d.startswith(".")]
+        if root.count(os.sep) - base >= 2:
+            dirs[:] = []
+        for f in files:
+            seen += 1
+            fl = f.lower()
+            if fl.endswith((".step", ".stp")):
+                return True
+            if fl.endswith(".py") and _is_cq(os.path.join(root, f)):
+                return True
+        if seen > limit:
+            break
+    return False
+
+
+def _daily():
+    """Once a day, in the background: refresh the script index, trim the cache, sync ~/.CAD4Ai/lib."""
+    stamp = os.path.join(APP_HOME, "cache", "hook", "daily.stamp")
+    try:
+        if time.time() - os.path.getmtime(stamp) < 86400:
+            return
+    except OSError:
+        pass
+    os.makedirs(os.path.dirname(stamp), exist_ok=True)
+    with open(stamp, "w") as f:
+        f.write(str(time.time()))
+    flags = (0x00000008 | 0x08000000) if os.name == "nt" else 0  # DETACHED_PROCESS | CREATE_NO_WINDOW
+    code = ("import sys; sys.path.insert(0, r'%s'); from cadtools import index, core, install; "
+            "install.sync(); core.prune_cache(); index.build()") % HERE
+    try:
+        subprocess.Popen([sys.executable, "-B", "-c", code], creationflags=flags, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    except OSError:
+        pass
+
+
+def start(ev):
+    try:
+        sys.path.insert(0, HERE)
+        from cadtools import install
+        install.sync()
+    except Exception:  # noqa: BLE001
+        pass
+    _daily()
+    if not _is_cad_folder(ev.get("cwd") or os.getcwd()):
+        return  # no CAD work here: no tokens spent on the hint
     out({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext":
          f'CAD4Ai local tools (heavy work on this PC, short JSON back): python "{CLI}" <summary|diff|collide|holes|dist|'
          'section|mass|verify|doctor|lint|new|std|vendor|fem|dfm|optimize|views|find> ... (skill cad-tools). '
          'Hooks already report: doctor on a failing script, diff/validity/collisions/expect() after a .step export, '
-         'lint after writing a script.'}})
+         'lint after writing a script. Model scripts import helpers via '
+         'sys.path.insert(0, os.path.expanduser("~/.CAD4Ai/lib")) (never the versioned plugin path).'}})
 
 
 def pre(ev):
@@ -89,10 +142,20 @@ def _is_cq(path):
         return False
 
 
-def _failed_script(ev, cwd):
-    """A CadQuery script the command ran, if the command output shows a Python traceback."""
+def _output_text(ev):
     resp = ev.get("tool_response")
-    text = (resp if isinstance(resp, str) else json.dumps(resp, ensure_ascii=False)) + str(ev.get("error") or "")
+    parts = []
+    if isinstance(resp, dict):
+        parts += [str(v) for k, v in resp.items() if isinstance(v, str)]
+    elif resp is not None:
+        parts.append(str(resp))
+    parts.append(str(ev.get("error") or ""))
+    return "\n".join(parts)
+
+
+def _failed_script(ev, cwd):
+    """(script, traceback text) of a CadQuery script the command ran, if its output shows a traceback."""
+    text = _output_text(ev)
     if "Traceback" not in text:
         return None
     cmd = str((ev.get("tool_input") or {}).get("command", ""))
@@ -100,12 +163,27 @@ def _failed_script(ev, cwd):
         p = next(g for g in m.groups() if g)
         p = p if os.path.isabs(p) else os.path.join(cwd, p)
         if os.path.isfile(p) and not os.path.basename(p).startswith((".cad4ai_", "cad4ai", "cc_hook")) and _is_cq(p):
-            return p
+            return p, text
     return None
 
 
-def _doctor_text(script):
-    raw = _run_cli(["doctor", script], timeout=170)
+def _doctor_text(script, tb=None):
+    args = ["doctor", script]
+    tf = None
+    if tb and os.path.basename(script) in tb:
+        import tempfile
+        fd, tf = tempfile.mkstemp(suffix=".txt", prefix="cad4ai_tb_")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(tb)
+        args += ["--traceback-file", tf]
+    try:
+        raw = _run_cli(args, timeout=170)
+    finally:
+        if tf:
+            try:
+                os.remove(tf)
+            except OSError:
+                pass
     if not raw:
         return f"[CAD4Ai doctor] {os.path.basename(script)}: diagnosis took too long"
     try:
@@ -136,7 +214,7 @@ def post(ev):
     reports = []
     bad = _failed_script(ev, cwd)
     if bad:
-        t = _doctor_text(bad)
+        t = _doctor_text(*bad)
         if t:
             reports.append(t)
     sf = _state_file(cwd)

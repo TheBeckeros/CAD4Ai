@@ -21,6 +21,8 @@ import re
 import shutil
 import subprocess
 import sys
+
+sys.dont_write_bytecode = True  # no __pycache__ inside the app folder
 import time
 import urllib.request
 

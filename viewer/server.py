@@ -84,6 +84,71 @@ EXPORT_LOCK = threading.Lock()
 
 # ------------------------------------------------------------------ helpers
 
+APP_ROOT = os.path.dirname(HERE)  # the plugin / app folder (repo or installed copy): never holds project data
+
+
+def _app_root_of(path):
+    """The app folder that contains `path`, if any: this plugin, any Claude plugin cache, or a CAD4Ai source
+    checkout (a folder with .claude-plugin/plugin.json named CAD4Ai)."""
+    p = os.path.abspath(path)
+    low = p.lower().replace("\\", "/")
+    if low.startswith(APP_ROOT.lower().replace("\\", "/") + "/") or low == APP_ROOT.lower().replace("\\", "/"):
+        return APP_ROOT
+    if "/.claude/plugins/" in low:
+        i = low.index("/.claude/plugins/")
+        return p[:i + len("/.claude/plugins")]
+    d = p
+    for _ in range(8):
+        manifest = os.path.join(d, ".claude-plugin", "plugin.json")
+        if os.path.isfile(manifest):
+            try:
+                with open(manifest, encoding="utf-8") as f:
+                    if json.load(f).get("name") == "CAD4Ai":
+                        return d
+            except (OSError, ValueError):
+                pass
+        nd = os.path.dirname(d)
+        if nd == d:
+            break
+        d = nd
+    return None
+
+
+def safe_data_dir(path):
+    """Session data (notes, screenshots, tokens) of a chat whose folder is the app itself goes to
+    ~/.CAD4Ai/sessions/<app folder name>/ instead, so the app folder stays clean."""
+    root = _app_root_of(path)
+    if not root:
+        return path
+    name = re.sub(r"[^\w.-]+", "_", os.path.basename(root.rstrip("\\/")) or "app")
+    return os.path.join(assist.APP_HOME, "sessions", name, os.path.basename(os.path.abspath(path).rstrip("\\/")))
+
+
+def clean_app_folder():
+    """Move session folders left inside the app folder (older versions wrote <cwd>/.CAD4Ai there) to
+    ~/.CAD4Ai/sessions and drop bytecode caches. Runs at server start."""
+    try:
+        old = os.path.join(APP_ROOT, ".CAD4Ai")
+        if os.path.isdir(old):
+            dest = os.path.join(assist.APP_HOME, "sessions", re.sub(r"[^\w.-]+", "_", os.path.basename(APP_ROOT)))
+            os.makedirs(dest, exist_ok=True)
+            for n in os.listdir(old):
+                src, dst = os.path.join(old, n), os.path.join(dest, n)
+                if os.path.exists(dst):
+                    shutil.rmtree(src, ignore_errors=True) if os.path.isdir(src) else os.remove(src)
+                else:
+                    shutil.move(src, dst)
+            shutil.rmtree(old, ignore_errors=True)
+        for root, dirs, _files in os.walk(APP_ROOT):
+            dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "vendor")]
+            for d in list(dirs):
+                if d == "__pycache__":
+                    shutil.rmtree(os.path.join(root, d), ignore_errors=True)
+                    dirs.remove(d)
+    except OSError:
+        pass
+
+
 def data_dir():
     return STATE["data"] or ""
 
@@ -126,7 +191,7 @@ def find_script(stl):
     except OSError:
         return None
     for n in names:
-        if not n.endswith(".py"):
+        if not n.endswith(".py") or n.startswith(".cad4ai_"):  # sandbox copies of doctor/optimize runs
             continue
         p = os.path.join(folder, n)
         try:
@@ -259,6 +324,13 @@ def housekeep(data):
             if os.path.isdir(dest_root):
                 for key in os.listdir(dest_root):
                     prune_history(os.path.join(dest_root, key))
+                    compress_history(os.path.join(dest_root, key))
+            try:
+                from cadtools import core as _core, install as _install
+                _install.sync()
+                _core.prune_cache()
+            except Exception:  # noqa: BLE001
+                pass
             cutoff = time.time() - 30 * 86400
             for sd in os.listdir(parent) if os.path.isdir(parent) else []:
                 d = os.path.join(parent, sd)
@@ -270,6 +342,55 @@ def housekeep(data):
         except OSError:
             pass
     threading.Thread(target=run, daemon=True).start()
+
+
+def hist_file(vdir, name):
+    """A file of a history version: stored plain (newest) or gzip-compressed (older, see housekeep)."""
+    p = os.path.join(vdir, name)
+    if os.path.isfile(p):
+        return p
+    return p + ".gz" if os.path.isfile(p + ".gz") else None
+
+
+def hist_bytes(p):
+    import gzip
+    if p.endswith(".gz"):
+        with gzip.open(p, "rb") as f:
+            return f.read()
+    with open(p, "rb") as f:
+        return f.read()
+
+
+def hist_restore(p, dst):
+    if p.endswith(".gz"):
+        tmp = dst + ".cad4ai-restore"
+        with open(tmp, "wb") as f:
+            f.write(hist_bytes(p))
+        os.replace(tmp, dst)
+    else:
+        shutil.copy2(p, dst)
+
+
+def compress_history(hdir):
+    """gzip the model files of every version but the newest (STEP text shrinks several times)."""
+    import gzip
+    try:
+        entries = sorted(e for e in os.listdir(hdir) if os.path.isdir(os.path.join(hdir, e)))
+    except OSError:
+        return
+    for e in entries[:-1]:
+        for name in ("model.step", "model.stl"):
+            p = os.path.join(hdir, e, name)
+            if not os.path.isfile(p):
+                continue
+            try:
+                tmp = p + ".gz.tmp"
+                with open(p, "rb") as fi, gzip.open(tmp, "wb", compresslevel=6) as fo:
+                    shutil.copyfileobj(fi, fo, 1 << 20)
+                os.replace(tmp, p + ".gz")
+                os.remove(p)
+            except OSError:
+                pass
 
 
 def snapshot_if_changed(cur):
@@ -338,103 +459,7 @@ def variants_of(path):
 
 # ---------------------------------------------------------------- params
 
-PARAM_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
-# a comment line that starts a parameter group: "# --- Lid ---", "# === Lid ===", "## Lid"
-SECTION = re.compile(r"^#+\s*[-=*~]{3,}\s*(.+?)\s*[-=*~]*\s*$|^##+\s+(.+?)\s*$")
-# a range in the parameter comment: "[mm] 10..80" or "10…80"
-RANGE = re.compile(r"(-?\d+(?:\.\d+)?)\s*(?:\.\.|…)\s*(-?\d+(?:\.\d+)?)")
-
-
-def _literal(node):
-    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float, bool)):
-        return node.value
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)) and \
-            isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, (int, float)) and \
-            not isinstance(node.operand.value, bool):
-        return -node.operand.value if isinstance(node.op, ast.USub) else node.operand.value
-    raise ValueError
-
-
-def parse_params(script):
-    with open(script, encoding="utf-8") as f:
-        src = f.read()
-    tree = ast.parse(src)
-    comments, sections = {}, []
-    try:
-        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
-            if tok.type == tokenize.COMMENT:
-                comments[tok.start[0]] = tok.string.lstrip("#").strip()
-                m = SECTION.match(tok.string.strip()) if tok.line.strip().startswith("#") else None
-                if m:
-                    sections.append((tok.start[0], (m.group(1) or m.group(2)).strip()))
-    except tokenize.TokenError:
-        pass
-    out = []
-    for node in tree.body:
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
-            continue
-        t = node.targets[0]
-        if not isinstance(t, ast.Name) or not PARAM_NAME.match(t.id):
-            continue
-        try:
-            val = _literal(node.value)
-        except ValueError:
-            continue
-        if node.value.lineno != node.value.end_lineno:
-            continue
-        comment = comments.get(node.lineno, "")
-        unit = ""
-        m = re.search(r"\[([^\]]+)\]", comment)
-        if m:
-            unit = m.group(1)
-        kind = "bool" if isinstance(val, bool) else ("int" if isinstance(val, int) else "float")
-        group = next((name for line, name in reversed(sections) if line < node.lineno), "")
-        item = {
-            "name": t.id, "value": val, "type": kind, "comment": comment, "unit": unit, "group": group,
-            "line": node.value.lineno, "col": node.value.col_offset, "endCol": node.value.end_col_offset,
-        }
-        r = RANGE.search(comment)
-        if r and kind != "bool":
-            lo, hi = sorted((float(r.group(1)), float(r.group(2))))
-            item["min"], item["max"] = lo, hi
-        out.append(item)
-    return out
-
-
-def fmt_value(val, kind):
-    if kind == "bool":
-        return "True" if val else "False"
-    if kind == "int":
-        return str(int(round(float(val))))
-    v = float(val)
-    s = f"{v:.6f}".rstrip("0")
-    return s + "0" if s.endswith(".") else s
-
-
-def write_params(script, values):
-    params = {p["name"]: p for p in parse_params(script)}
-    with open(script, encoding="utf-8") as f:
-        lines = f.read().split("\n")
-    changes = []
-    # back to front by position so offsets do not shift
-    for name, val in sorted(values.items(), key=lambda kv: (-params[kv[0]]["line"], -params[kv[0]]["col"])
-                            if kv[0] in params else (0, 0)):
-        p = params.get(name)
-        if not p:
-            continue
-        i = p["line"] - 1
-        line = lines[i]
-        # col_offset is in UTF-8 bytes
-        b = line.encode("utf-8")
-        new = fmt_value(val, p["type"])
-        old = b[p["col"]:p["endCol"]].decode("utf-8")
-        if old == new:
-            continue
-        lines[i] = (b[:p["col"]] + new.encode("utf-8") + b[p["endCol"]:]).decode("utf-8")
-        changes.append(f"{name} {old}→{new}")
-    with open(script, "w", encoding="utf-8", newline="") as f:
-        f.write("\n".join(lines))
-    return changes
+from cadtools.params import PARAM_NAME, SECTION, RANGE, parse_params, fmt_value, write_params  # noqa: E402,F401
 
 
 COLOR_CACHE = {}
@@ -1053,10 +1078,10 @@ class Handler(BaseHTTPRequestHandler):
                 kind = (q.get("kind") or ["stl"])[0]
                 if not cur or not re.match(r"^[0-9-]+$", vid) or kind not in ("stl", "step"):
                     return self._send(404, {"error": "not found"})
-                p = os.path.join(history_dir(cur["path"]), vid, f"model.{kind}")
-                if not os.path.isfile(p):
+                p = hist_file(os.path.join(history_dir(cur["path"]), vid), f"model.{kind}")
+                if not p:
                     return self._send(404, {"error": "not found"})
-                return self._file(p)
+                return self._send(200, hist_bytes(p), "application/octet-stream")
             if url.path == "/api/variants":
                 cur = current()
                 return self._send(200, variants_of(cur["path"]) if cur else {"items": []})
@@ -1208,9 +1233,10 @@ class Handler(BaseHTTPRequestHandler):
                     EXPORT_LOCK.release()
 
             if url.path == "/api/data":
-                STATE["data"] = body.get("data") or STATE["data"]
+                STATE["data"] = safe_data_dir(body.get("data")) if body.get("data") else STATE["data"]
+                os.makedirs(STATE["data"], exist_ok=True)
                 housekeep(STATE["data"])
-                return self._send(200, {"ok": True})
+                return self._send(200, {"ok": True, "data": STATE["data"]})
 
             if url.path == "/api/annotate":
                 if not STATE["data"]:
@@ -1381,10 +1407,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(404, {"error": "version does not exist"})
                 snapshot_if_changed(cur)
                 meta = read_json(os.path.join(vdir, "meta.json"), {})
-                if os.path.isfile(os.path.join(vdir, "model.stl")) and cur["path"].lower().endswith(".stl"):
-                    shutil.copy2(os.path.join(vdir, "model.stl"), cur["path"])
-                if os.path.isfile(os.path.join(vdir, "model.step")) and cur.get("step"):
-                    shutil.copy2(os.path.join(vdir, "model.step"), cur["step"])
+                if hist_file(vdir, "model.stl") and cur["path"].lower().endswith(".stl"):
+                    hist_restore(hist_file(vdir, "model.stl"), cur["path"])
+                if hist_file(vdir, "model.step") and cur.get("step"):
+                    hist_restore(hist_file(vdir, "model.step"), cur["step"])
                 if os.path.isfile(os.path.join(vdir, "script.py")) and cur.get("script"):
                     shutil.copy2(os.path.join(vdir, "script.py"), cur["script"])
                 now = time.time()
@@ -1463,6 +1489,7 @@ def main():
     ap.add_argument("--detach", action="store_true")
     ap.add_argument("--open", help="show this .step/.stl right away (a saved project's Open model.bat)")
     a = ap.parse_args()
+    a.data = safe_data_dir(a.data)
     os.makedirs(a.data, exist_ok=True)
     if a.open and os.path.isfile(a.open):
         STATE["data"] = a.data
@@ -1485,6 +1512,7 @@ def main():
         return
 
     STATE["data"] = a.data
+    clean_app_folder()
     housekeep(a.data)
     try:
         srv = ThreadingHTTPServer(("0.0.0.0" if lan_on() else "127.0.0.1", a.port), Handler)

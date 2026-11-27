@@ -11,6 +11,8 @@ import os
 import shutil
 import sys
 
+sys.dont_write_bytecode = True  # no __pycache__ inside the app folder
+
 # format -> (extension, description, needs CadQuery)
 FORMATS = {
     "step": (".step", "AP214 · exact B-rep, keeps names and colours", False),

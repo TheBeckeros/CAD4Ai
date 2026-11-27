@@ -122,12 +122,18 @@ def _bisect_radius(script, line_no, method, workers):
     return res
 
 
-def diagnose(script, workers=None):
+def diagnose(script, workers=None, traceback_text=None):
+    """traceback_text: the failure already seen (e.g. by the hook) - then the script is not run again
+    just to see it fail; only the experiments (radius search, line removal) run."""
     workers = workers or max(2, min(10, (os.cpu_count() or 4) - 2))
-    first = sandbox.run(script, timeout=900)
-    if first["ok"]:
-        return {"ok": True, "status": "script runs fine", "ms": first["ms"], "exports": first["files"]}
-    se = first["stderr"]
+    se = traceback_text if traceback_text and "Traceback" in traceback_text else None
+    if se is None:
+        first = sandbox.run(script, timeout=900)
+        if first["ok"]:
+            return {"ok": True, "status": "script runs fine", "ms": first["ms"], "exports": first["files"]}
+        se = first["stderr"]
+    else:
+        se = se[se.rfind("Traceback"):]
     f, ln = _user_frame(se, script)
     err = _err_line(se)
     out = {"ok": False, "error": err, "file": f, "line": ln}

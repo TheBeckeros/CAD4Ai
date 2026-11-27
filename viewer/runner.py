@@ -13,6 +13,8 @@ import json
 import os
 import runpy
 import sys
+
+sys.dont_write_bytecode = True  # no __pycache__ inside the app folder
 import time
 import traceback
 

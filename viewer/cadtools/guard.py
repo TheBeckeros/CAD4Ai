@@ -13,7 +13,6 @@ import re
 
 from . import core
 
-PARAM_LINE = re.compile(r"^[A-Z][A-Z0-9_]*\s*=\s*[-+]?[\d.eE+-]+(\s*#.*)?$|^[A-Z][A-Z0-9_]*\s*=\s*(True|False)(\s*#.*)?$")
 
 
 def _script_for(step):
@@ -36,17 +35,17 @@ def _script_for(step):
 
 
 def _snapshot(script):
+    """(parameter values, hash of everything else) - parameters read by the viewer's own parser."""
+    from .params import parse_params
     with open(script, encoding="utf-8", errors="replace") as f:
-        src = f.read()
-    vals, body = {}, []
-    for line in src.split("\n"):
-        s = line.strip()
-        if PARAM_LINE.match(s):
-            k, v = s.split("=", 1)
-            vals[k.strip()] = v.split("#", 1)[0].strip()
-        else:
-            body.append(line)
-    return vals, hashlib.sha1("\n".join(body).encode()).hexdigest()
+        lines = f.read().split("\n")
+    vals = {}
+    for p in parse_params(script):
+        vals[p["name"]] = repr(p["value"])
+        i = p["line"] - 1
+        b = lines[i].encode("utf-8")
+        lines[i] = (b[:p["col"]] + b"<v>" + b[p["endCol"]:]).decode("utf-8", "replace")
+    return vals, hashlib.sha1("\n".join(lines).encode()).hexdigest()
 
 
 def _state(step):

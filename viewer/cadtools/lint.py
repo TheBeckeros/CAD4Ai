@@ -10,7 +10,10 @@ import os
 import re
 
 PARAM = re.compile(r"^[A-Z][A-Z0-9_]*$")
-NOMINAL = {3: (3.4, 2.5), 4: (4.5, 3.3), 5: (5.5, 4.2), 6: (6.6, 5.0), 8: (9.0, 6.8), 10: (11.0, 8.5), 12: (13.5, 10.2)}
+from .std import THREAD  # noqa: E402  one thread table for std, lint and the collision check
+
+# hole(5) typed for an M5 screw: size -> (clearance, tap drill)
+NOMINAL = {int(k[1:]): (v[3], v[1]) for k, v in THREAD.items() if float(k[1:]).is_integer() and float(k[1:]) >= 3}
 BOOL = {"cut", "union", "intersect", "cutBlind", "cutThruAll", "fuse"}
 
 
@@ -107,7 +110,8 @@ def lint(script):
             if m == "hole" and node.args and isinstance(node.args[0], ast.Constant) and \
                     isinstance(node.args[0].value, (int, float)) and node.args[0].value in NOMINAL:
                 cl, tap = NOMINAL[node.args[0].value]
-                add(node.lineno, "warn", f"hole({node.args[0].value}) - for M{node.args[0].value:g} use clearance {cl} or tap drill {tap} (std hole M{node.args[0].value:g})")
+                add(node.lineno, "warn", f"hole({node.args[0].value}) - an M{node.args[0].value:g} screw needs clearance {cl}; "
+                    f"a tapped hole / nut thread is modelled at the tap drill {tap} (tap_drill(\"M{node.args[0].value:g}\"))")
             if m in ("fillet", "chamfer"):
                 before = meths[:-1]
                 if len(node.args) < 2 and not node.keywords and not any(x in ("edges", "faces") for x in before[-3:])                         and root not in ("self",):

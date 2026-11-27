@@ -1,13 +1,17 @@
 """Standard parts: dimension tables + CadQuery generators (simplified geometry, correct envelope/interfaces).
 
 Use from a model script:
-    import sys; sys.path.insert(0, r"<CAD4Ai>/viewer")
+    import os, sys; sys.path.insert(0, os.path.expanduser("~/.CAD4Ai/lib"))
     from cadtools.std import part, hole, dims
     s = part("ISO 4762 M5x16")           # cq.Workplane, head on Z=0 looking +Z, shank along -Z
     h = hole("M5", "clearance")          # {"d": 5.5, ...}
 CLI: cad4ai std "ISO 4762 M5x16" | cad4ai std hole M5 | cad4ai std list
 Generated STEP files are cached in ~/.CAD4Ai/cache/std (instant the second time).
-Threads are not modelled (shank = nominal diameter): a screw in a tapped hole overlaps by design.
+THREAD CONVENTION (simplified representation, used everywhere in CAD4Ai):
+  external thread (screw, stud, threaded shaft) = cylinder of the NOMINAL diameter (M4 -> 4.0);
+  internal thread (tapped hole, nut)            = hole of the TAP DRILL diameter   (M4 -> 3.3).
+  So a screw in its thread overlaps the part by a thin ring on purpose; the collision check knows this
+  and reports it as an expected thread engagement, not as a collision. Use tap_drill("M4") for the hole.
 Values: ISO/DIN nominal dimensions (max head sizes) for metric coarse threads.
 """
 import os
@@ -97,6 +101,16 @@ def _m(code):
 def _len(code):
     m = re.search(r"[xX×](\d+(?:\.\d+)?)", code)
     return float(m.group(1)) if m else None
+
+
+def tap_drill(size):
+    """Hole diameter of an internal thread (tapped hole, nut) by the CAD4Ai convention: 'M4' -> 3.3."""
+    return THREAD[_m(size) or size][1]
+
+
+def nominal(size):
+    """Diameter of an external thread (screw, stud) by the convention: 'M4' -> 4.0."""
+    return float((_m(size) or size)[1:])
 
 
 def hole(size, kind="clearance"):
@@ -213,7 +227,8 @@ def part(code):
         return head.union(cq.Workplane("XY").circle(nom / 2).extrude(-d["L"]))
     if std in ("ISO 4032", "ISO 4035"):
         nom = float(d["size"][1:])
-        return _hexagon(cq, d["s"], d["m"]).edges("not |Z").chamfer(nom * 0.05).faces(">Z").workplane().hole(nom)
+        # internal thread by the convention: tap-drill hole
+        return _hexagon(cq, d["s"], d["m"]).edges("not |Z").chamfer(nom * 0.05).faces(">Z").workplane().hole(THREAD[d["size"]][1])
     if std == "ISO 7089":
         return cq.Workplane("XY").circle(d["d2"] / 2).circle(d["d1"] / 2).extrude(d["h"])
     if std == "ISO 4029":

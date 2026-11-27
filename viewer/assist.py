@@ -205,8 +205,9 @@ def check_model(step):
         return CHECK_CACHE[key]
     if len(CHECK_CACHE) >= 16:
         CHECK_CACHE.pop(next(iter(CHECK_CACHE)))
-    r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "checks.py"), step], capture_output=True, text=True,
-                       timeout=600, encoding="utf-8")
+    # shared with the Claude hook and expect(): the digest of one file version is computed once
+    r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "cad4ai.py"), "check", step], capture_output=True,
+                       text=True, timeout=600, encoding="utf-8", creationflags=0x08000000 if os.name == "nt" else 0)
     try:
         res = json.loads(r.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):

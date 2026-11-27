@@ -95,20 +95,88 @@ def cache_path(path, tool, args=""):
 
 
 def cached(path, tool, args, fn):
+    """Result of fn() for this exact file version, computed once. A lock file makes a second process that
+    asks for the same thing at the same time (hook, viewer, script) wait for the first and reuse its result
+    instead of computing it twice."""
     cp = cache_path(path, tool, args)
-    try:
-        with open(cp, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        pass
-    t0 = time.time()
-    res = fn()
-    if isinstance(res, dict):
-        res.setdefault("seconds", round(time.time() - t0, 1))
+
+    def read():
+        try:
+            with open(cp, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+    res = read()
+    if res is not None:
+        return res
     os.makedirs(os.path.dirname(cp), exist_ok=True)
-    with open(cp, "w", encoding="utf-8") as f:
-        json.dump(res, f, ensure_ascii=False)
-    return res
+    lock = cp + ".lock"
+    fd = None
+    for _ in range(3600):  # up to ~15 min behind another process doing the same work
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(lock) > 900:  # stale lock of a crashed process
+                    os.remove(lock)
+                    continue
+            except OSError:
+                continue
+            time.sleep(0.25)
+            res = read()
+            if res is not None:
+                return res
+    try:
+        res = read()
+        if res is not None:
+            return res
+        t0 = time.time()
+        res = fn()
+        if isinstance(res, dict):
+            res.setdefault("seconds", round(time.time() - t0, 1))
+        tmp = cp + f".{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(res, f, ensure_ascii=False)
+        os.replace(tmp, cp)
+        return res
+    finally:
+        if fd is not None:
+            os.close(fd)
+            try:
+                os.remove(lock)
+            except OSError:
+                pass
+
+
+def prune_cache(max_mb=2000, max_days=60):
+    """Delete cache files older than max_days, then the oldest until the cache is under max_mb.
+    The search index and standard parts are kept (rebuilt only on request)."""
+    keep = {"index", "std", "hook"}
+    files = []
+    for root, dirs, fs in os.walk(CACHE):
+        rel = os.path.relpath(root, CACHE).split(os.sep)[0]
+        if rel in keep:
+            continue
+        for f in fs:
+            p = os.path.join(root, f)
+            try:
+                st = os.stat(p)
+                files.append((st.st_atime if st.st_atime > st.st_mtime else st.st_mtime, st.st_size, p))
+            except OSError:
+                pass
+    cutoff = time.time() - max_days * 86400
+    total = sum(f[1] for f in files)
+    removed = 0
+    for t, size, p in sorted(files):
+        if t < cutoff or total > max_mb * 1e6:
+            try:
+                os.remove(p)
+                total -= size
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 def model_key(path):
@@ -128,18 +196,28 @@ def out_dir(path, sub):
 GENERIC = __import__("re").compile(r"^(NAUO\d*|Open CASCADE STEP translator.*|SOLID|Body|)$", 2)
 
 
-class Inst:
-    __slots__ = ("name", "shape", "key", "info", "path")
+METRIC = __import__("re").compile(r"(?:^|[^A-Za-z])M\d|ISO ?\d{4}|DIN ?\d{3}")
+FLEX = __import__("re").compile(r"kabel|cable|lank|wire|vodi[cč]|p[aá]sek|strap|hadic|hose|(?<![a-z])lano|(?<![a-z])rope|tkanic|[sš]ňůr", 2)
 
-    def __init__(self, name, shape, key, info, path):
+
+class Inst:
+    __slots__ = ("name", "shape", "key", "info", "path", "owner")
+
+    def __init__(self, name, shape, key, info, path, owner=None):
         self.name, self.shape, self.key, self.info, self.path = name, shape, key, info, path
+        self.owner = owner or name  # one STEP instance; its solids share the owner
 
     @property
     def type(self):
         t = (self.info or {}).get("type", "")
-        if not t and FASTENER.search(self.name or ""):
-            return "fastener"
+        if not t and FASTENER.search(self.name or "") and METRIC.search(self.name or ""):
+            return "fastener"  # a fastener word AND a metric size (SROUB_M4x10), not just "bolt_plate"
         return t
+
+    @property
+    def flexible(self):
+        """Cables, wires, straps, hoses: modelled crossing/clamped, overlaps with them are expected."""
+        return bool(FLEX.search(self.name or ""))
 
     @property
     def material(self):
@@ -168,8 +246,22 @@ def _info_for(info, name):
     return info[best] if best else {}
 
 
+_LOADED = {}
+
+
 def load(step):
-    """STEP -> list[Inst] of solid instances in their assembly position."""
+    """STEP -> list[Inst] of solid instances in their assembly position (memoised per file version, so
+    several tools in one process read a big STEP once)."""
+    k = file_key(step) if os.path.isfile(step) else step
+    if k in _LOADED:
+        return _LOADED[k]
+    res = _load(step)
+    _LOADED.clear()  # keep only the latest model (memory)
+    _LOADED[k] = res
+    return res
+
+
+def _load(step):
     from OCP.STEPCAFControl import STEPCAFControl_Reader
     from OCP.TDocStd import TDocStd_Document
     from OCP.TCollection import TCollection_ExtendedString
@@ -205,14 +297,15 @@ def load(step):
             exp.Next()
         if not solids:
             return
+        base = nm
+        if base in used:
+            used[base] += 1
+            base = f"{nm}~{used[nm]}"
+        else:
+            used[base] = 1
         for i, s in enumerate(solids):
-            n = nm if len(solids) == 1 else f"{nm}#{i + 1}"
-            if n in used:
-                used[n] += 1
-                n = f"{n}~{used[n]}"
-            else:
-                used[n] = 1
-            out.append(Inst(n, s, f"{key}:{i}", _info_for(info, nm), path))
+            n = base if len(solids) == 1 else f"{base}#{i + 1}"
+            out.append(Inst(n, s, f"{key}:{i}", _info_for(info, nm), path, base))
 
     def walk(lab, loc, path):
         ref = lab

@@ -60,8 +60,10 @@ them). The screenshot says **what** the user means and where it is on the part; 
    is installed). Put new sizes into named parameters in the script header
    (`NAME = value  # description [mm] min..max`, under a `# --- Group ---` line). The viewer then shows them in the Parameters tab and
    the user can tune them. Select edges and vertices by coordinates, not by index.
-6. **Export the STEP (no STL unless the task asks for it) and verify** (one solid per part, BRepCheck valid, volume against a hand
-   calculation, face types). The viewer reloads by itself after the export and stores a new
+6. **Export the STEP (no STL unless the task asks for it) and verify.** Do not write a check script: the
+   CAD4Ai hook reports validity, the diff to the previous version, collisions and the script's `expect()`
+   results right after the export. Add an `expect()` line for the size you just changed (skill cad-tools)
+   so the hook confirms it. The viewer reloads by itself after the export and stores a new
    version, which the user can compare with the old one in the Versions tab.
 7. **Mark the note as done** (its pin turns green in the viewer):
    ```

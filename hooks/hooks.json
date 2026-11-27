@@ -8,7 +8,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" start",
+            "command": "python -B \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" start",
             "timeout": 10
           }
         ]
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" pre",
+            "command": "python -B \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" pre",
             "timeout": 10
           }
         ]
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" post",
+            "command": "python -B \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" post",
             "timeout": 180
           }
         ]
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" edit",
+            "command": "python -B \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" edit",
             "timeout": 30
           }
         ]
@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" post",
+            "command": "python -B \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" post",
             "timeout": 180
           }
         ]

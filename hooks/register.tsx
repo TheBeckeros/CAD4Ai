@@ -419,10 +419,26 @@ async function claimViewer($: any): Promise<void> {
     .catch(() => undefined)
   if (r?.ok) {
     serverUp = true
+    await adoptDataDir(r)
     return
   }
   serverUp = false
   await ensureServer($)
+  // the server may move the folder (a chat in the app folder itself keeps its data in ~/.CAD4Ai/sessions)
+  const r2 = await $.http
+    .fetch(`${VIEWER_URL}api/data`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: dir }) })
+    .catch(() => undefined)
+  if (r2?.ok) await adoptDataDir(r2)
+}
+
+// The server answers /api/data with the folder it really uses; notes are read from there.
+async function adoptDataDir(r: any): Promise<void> {
+  try {
+    const j = JSON.parse(String(r?.text || '{}')) // $.http.fetch: { ok, status, headers, text }
+    if (j && typeof j.data === 'string' && j.data) dataDir = j.data
+  } catch {
+    // older server without the field: keep the folder we asked for
+  }
 }
 
 async function viewerRunning($: any): Promise<boolean> {

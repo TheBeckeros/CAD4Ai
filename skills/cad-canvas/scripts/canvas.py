@@ -12,6 +12,8 @@ See the cad-canvas skill for the object and briefing schemas. A rejected call pr
 import argparse
 import json
 import sys
+
+sys.dont_write_bytecode = True  # no __pycache__ inside the app folder
 import urllib.error
 import urllib.request
 from urllib.parse import quote

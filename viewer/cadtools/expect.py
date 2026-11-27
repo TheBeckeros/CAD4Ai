@@ -1,6 +1,6 @@
 """Design-intent checks written in the model script itself (plain Python, CadQuery stays as it is).
 
-    import sys; sys.path.insert(0, r"<CAD4Ai>/viewer")
+    import os, sys; sys.path.insert(0, os.path.expanduser("~/.CAD4Ai/lib"))
     from cadtools.expect import expect
     ...build, cq.exporters.export / assy.save(...)...
     expect("deska").size(100, 60, 5).holes(4, d=5.5, pitch=(80, 40)).mass(max=300)
@@ -127,11 +127,19 @@ def _fmt(v):
 
 
 def evaluate(step, rules):
+    """Cheap rules now (only the parts they name are measured); no_collisions rules are returned as
+    deferred - the hook / `cad4ai after` checks them on all cores, incrementally, with the shared cache."""
     from . import core, digest
     from OCP.BRepExtrema import BRepExtrema_DistShapeShape
     model = core.load(step)
-    dg = {p["name"]: p for p in digest.digest(step, detail=True, parallel=False)["parts"]}
-    res = []
+    memo = {}
+
+    def pd(inst, detail):
+        k = (inst.name, detail)
+        if k not in memo:
+            memo[k] = digest.part_digest(inst, detail)
+        return memo[k]
+    res, deferred = [], []
 
     def sel(names):
         try:
@@ -147,13 +155,17 @@ def evaluate(step, rules):
             if insts is None:
                 res.append((False, tag, f"no part named {label}"))
                 continue
-            ps = [dg[i.name] for i in insts if i.name in dg]
+            if kind == "collide":
+                deferred.append({"names": r.names, "ignore": kw.get("ignore", True)})
+                continue
+            need = kind in ("holes", "valid")
+            ps = [pd(i, need) for i in insts] if kind not in ("count", "clearance") else []
             try:
                 ok, msg = _check(kind, kw, insts, ps, model, BRepExtrema_DistShapeShape, core)
             except Exception as e:  # noqa: BLE001
                 ok, msg = False, f"check error {type(e).__name__}: {e}"
             res.append((ok, tag, msg))
-    return res
+    return res, deferred
 
 
 def _env(ps):
@@ -270,19 +282,21 @@ def _report():
     _CUR[0] = step
     from . import core
     try:
-        res = evaluate(step, _RULES)
+        res, deferred = evaluate(step, _RULES)
     except Exception as e:  # noqa: BLE001
         print(f"[expect] could not check: {type(e).__name__}: {e}", file=sys.stderr)
         return
     ok = sum(1 for r in res if r[0])
-    lines = [f"[expect] {ok}/{len(res)} OK ({os.path.basename(step)})"]
+    lines = [f"[expect] {ok}/{len(res)} OK ({os.path.basename(step)})" +
+             (f"; {len(deferred)} collision rule(s) checked by the CAD4Ai hook" if deferred else "")]
     lines += [f"  FAIL {t}: {m}" for good, t, m in res if not good]
     txt = "\n".join(lines)
     print(txt, file=sys.stderr if ok < len(res) else sys.stdout)
     p = result_file(step)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p, "w", encoding="utf-8") as f:
-        json.dump({"key": core.file_key(step), "text": txt, "ok": ok, "n": len(res)}, f, ensure_ascii=False)
+        json.dump({"key": core.file_key(step), "text": txt, "ok": ok, "n": len(res), "deferred": deferred}, f,
+                  ensure_ascii=False)
 
 
 def flush():

@@ -24,27 +24,35 @@ def base_name(inst_name):
 
 
 def guess(inst):
+    """Only what is certain: a type when the name is a recognised standard part (screw size, bearing
+    code, O-ring), its standard, and the subassembly. A wrong type is worse than none (the viewer groups
+    by it and fastener overlaps are judged differently), so nothing is guessed from loose words."""
     nm = base_name(inst.name)
     d = {}
-    if core.FASTENER.search(nm):
-        d["type"] = "fastener"
-    else:
-        for t, rx in TYPES:
-            if rx.search(nm):
-                d["type"] = t
-                break
-        else:
-            d["type"] = "custom"
+    dims = None
     try:
         from . import std
         dims = std.dims(nm)
+    except Exception:  # noqa: BLE001
+        dims = None
+    if dims:
         s = dims.get("std") or ""
         size = dims.get("size") or dims.get("bearing") or dims.get("motor") or dims.get("profile") or ""
         L = dims.get("L")
         if s or size:
             d["standard"] = " ".join(x for x in (s, f"{size}x{L:g}" if (size and L) else str(size)) if x).strip()
-    except Exception:  # noqa: BLE001
-        pass
+        if "bearing" in dims:
+            d["type"] = "bearing"
+        elif s.startswith("ISO 3601"):
+            d["type"] = "seal"
+        elif "motor" in dims:
+            d["type"] = "electrical"
+        elif "profile" in dims:
+            d["type"] = "purchased"
+        elif s.startswith("ISO"):
+            d["type"] = "fastener"
+    elif core.FASTENER.search(nm) and re.search(r"(^|[^A-Za-z])M\d", nm):
+        d["type"] = "fastener"  # e.g. SROUB_M4x10: a metric size in the name
     if inst.path and "/" in inst.path:
         d["subassembly"] = inst.path.split("/", 1)[1]
     return nm, d
@@ -81,6 +89,8 @@ def fill_parts_json(step, only_with_script=True):
     added = []
     for inst in model:
         nm, d = guess(inst)
+        if not d:
+            continue  # nothing certain to say about this part
         if nm not in parts:
             # an existing entry for a prefix (e.g. "Bolt" for Bolt_3) covers it
             if any(nm.startswith(k) for k in parts):
@@ -101,20 +111,21 @@ TEMPLATE = '''"""{title}
 
 Built by CadQuery; exports {name}.step (+ {name}.parts.json is filled in by CAD4Ai).
 """
+import os
 import sys
 
 import cadquery as cq
 
-sys.path.insert(0, r"{viewer}")
+sys.path.insert(0, os.path.expanduser("~/.CAD4Ai/lib"))  # stable CAD4Ai helpers (not the versioned plugin path)
 from cadtools.expect import expect  # noqa: E402  design-intent checks, run after the export
-from cadtools.std import part, hole  # noqa: E402,F401  standard parts (ISO screws, bearings...)
-from cadtools.cache import cached_part  # noqa: E402,F401  @cached_part: rebuild only what changed
+from cadtools.std import part  # noqa: E402,F401  standard parts: part("ISO 4762 M5x16")
+from cadtools.cache import cached_part  # noqa: E402  @cached_part: rebuild only what changed
 
 # --- Main ---
 WIDTH = 100.0  # overall width [mm] 10..500
 DEPTH = 60.0  # overall depth [mm] 10..500
 THICK = 5.0  # plate thickness [mm] 1..30
-HOLE = hole("M5")["clearance"]  # clearance hole for M5 [mm]
+HOLE = 5.5  # clearance hole M5 (cad4ai std hole M5) [mm] 3..20
 
 
 @cached_part
@@ -136,7 +147,8 @@ def new_script(path, title=None):
     if os.path.exists(path):
         raise FileExistsError(path)
     name = os.path.splitext(os.path.basename(path))[0]
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    from . import install
+    install.sync()
     with open(path, "w", encoding="utf-8") as f:
-        f.write(TEMPLATE.format(title=title or name, name=name, viewer=here))
+        f.write(TEMPLATE.format(title=title or name, name=name))
     return path
