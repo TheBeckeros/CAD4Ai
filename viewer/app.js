@@ -3604,6 +3604,113 @@ function renderSettings() {
   });
 }
 $('bSettings').onclick = async () => { await loadSettings(); renderSettings(); $('settings').classList.add('open'); };
+
+// ---- Settings tabs: everything the plugin contains (libraries, candidates, rules, tools, skills, data)
+let plugCat = null, libSel = null;
+const stBadge = st => `<span class="badge ${({ verified: 'ok', formula: 'info', vendor: 'warn', unverified: 'warn' })[st] || ''}">${esc(st || '?')}</span>`;
+const lvBadge = lv => `<span class="badge ${({ mandatory: 'bad', check: 'info', default: 'ok', convention: 'warn' })[lv] || ''}">${esc(lv)}</span>`;
+async function loadCatalog(force) {
+  if (plugCat && !force) return plugCat;
+  plugCat = await api('/api/plugin/catalog');
+  $('plVersion').textContent = plugCat.version ? 'CAD4Ai ' + plugCat.version : '';
+  const n = (plugCat.candidates || []).filter(c => c.status === 'suggested' || c.status === 'new').length;
+  $('nCands').textContent = n ? n : '';
+  return plugCat;
+}
+async function plugAct(body) {
+  const r = await api('/api/plugin/action', body);
+  if (!r.ok) throw new Error(r.error || 'failed');
+  return r;
+}
+const SET_RENDER = { libs: () => renderLibs(), cands: () => renderCands(), rules: () => renderRules(), tools: () => renderTools(), skills: () => renderSkills(), data: () => renderData() };
+document.querySelectorAll('#setTabs button').forEach(b => b.onclick = async () => {
+  document.querySelectorAll('#setTabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.spane').forEach(x => x.classList.toggle('on', x.id === 'sp-' + b.dataset.st));
+  $('setReset').style.display = b.dataset.st === 'presets' ? '' : 'none';
+  if (b.dataset.st === 'presets') return;
+  try { await loadCatalog(); SET_RENDER[b.dataset.st](); }
+  catch (e) { $('sp-' + b.dataset.st).innerHTML = `<div class="muted">Could not load: ${esc(e.message)}</div>`; }
+});
+function famCode(f, row) {
+  const k = String(row[0]);
+  if (/^M\d/.test(k) && /M\d/.test(f.example)) return f.example.replace(/M\d+(\.\d+)?/, k);
+  if (f.id === 'bearing') return k;
+  if (f.id === 'NEMA') return `${k} x40`;
+  if (f.id === 'profile') return `${k}x200`;
+  if (f.id === 'DIN 471' || f.id === 'DIN 472') return `${f.id} ${k}`;
+  if (f.id === 'key' || f.id === 'thread') return null;
+  return f.example || null;
+}
+function renderLibs() {
+  const q = ($('libQ').value || '').toLowerCase();
+  const fams = plugCat.libraries.filter(f => !q || (f.title + ' ' + f.id + ' ' + f.aliases + ' ' + f.example + ' ' + f.rows.map(r => r[0]).join(' ')).toLowerCase().includes(q));
+  $('libList').innerHTML = fams.map(f => `<div class="libitem ${libSel === f.id ? 'on' : ''}" data-id="${esc(f.id)}"><span class="t">${esc(f.title)}</span>${f.origin === 'user' ? '<span class="badge info">own</span>' : ''}${stBadge(f.status)}</div>`).join('')
+    + `<div style="margin-top:10px"><button class="ghost" id="libNew">+ Own family…</button></div>`;
+  $('libList').querySelectorAll('.libitem').forEach(el => el.onclick = () => { libSel = el.dataset.id; renderLibs(); });
+  $('libNew').onclick = async () => {
+    const id = prompt('Id of the new family (e.g. alu30, hinge_small):'); if (!id) return;
+    try { const r = await plugAct({ action: 'new-family', id, title: id }); toast('Created ' + r.file + ' - ask Claude to fill it in.'); await loadCatalog(true); renderLibs(); } catch (e) { toast(e.message, true); }
+  };
+  const f = plugCat.libraries.find(x => x.id === libSel);
+  if (!f) { $('libMain').innerHTML = `<div class="muted">${plugCat.libraries.length} families. Pick one on the left, or search. Claude calls them by code, e.g. <span class="mono">place("ISO 4762 M5x16", at=…)</span>.</div>`; return; }
+  const code3d = f.rows.length ? famCode(f, f.rows[0]) : f.example;
+  $('libMain').innerHTML = `<div class="row" style="margin:0;gap:8px;align-items:center"><b>${esc(f.title)}</b>${stBadge(f.status)}${f.origin === 'user' ? '<span class="badge info">own family</span>' : ''}</div>
+    <div class="muted" style="margin-top:4px">Source: ${esc(f.source || '—')}</div>
+    ${f.note ? `<div class="muted" style="margin-top:4px">${esc(f.note)}</div>` : ''}
+    ${f.file ? `<div class="muted mono" style="margin-top:4px">${esc(f.file)}</div>` : ''}
+    <div class="row" style="margin:8px 0 0;gap:6px"><input id="libCode" value="${esc(code3d || '')}" style="flex:1" placeholder="code, e.g. ${esc(f.example)}"><button class="ghost" id="libInfo">Info</button><button class="primary" id="libOpen">Open in 3D</button></div>
+    <div id="libOut"></div>
+    <table class="ptable"><thead><tr>${f.columns.map(c => `<th>${esc(c)}</th>`).join('')}<th></th></tr></thead><tbody>
+    ${f.rows.map((r, i) => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join('')}<td>${famCode(f, r) ? `<button class="ghost" data-row="${i}">3D</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
+  const open = async code => { try { await plugAct({ action: 'open-part', code }); toast('Opened ' + code + ' as a model tab.'); } catch (e) { toast(e.message, true); } };
+  $('libOpen').onclick = () => open($('libCode').value.trim());
+  $('libInfo').onclick = async () => {
+    try { const r = await plugAct({ action: 'part-info', code: $('libCode').value.trim() }); $('libOut').innerHTML = `<div class="pinfo">${esc(JSON.stringify(r.info, null, 1))}</div>`; }
+    catch (e) { $('libOut').innerHTML = `<div class="pinfo">${esc(e.message)}</div>`; }
+  };
+  $('libMain').querySelectorAll('[data-row]').forEach(b => b.onclick = () => open(famCode(f, f.rows[+b.dataset.row])));
+}
+$('libQ').oninput = () => { if (plugCat) renderLibs(); };
+function renderCands() {
+  const live = c => c.status === 'suggested' || c.status === 'new';
+  const cs = (plugCat.candidates || []).slice().sort((a, b) => (live(a) ? 0 : 1) - (live(b) ? 0 : 1) || b.count - a.count);
+  $('sp-cands').innerHTML = `<div class="muted">Parts in your models that could become a library family (found locally after each export, no tokens). Accept = a family skeleton is created in <span class="mono">~/.CAD4Ai/library/families</span>; then ask Claude to fill it in.</div>`
+    + (cs.length ? `<table class="ptable"><thead><tr><th>Candidate</th><th>Why</th><th>Examples</th><th>Status</th><th></th></tr></thead><tbody>${cs.map(c => `<tr>
+      <td><b>${esc(c.title)}</b><div class="muted mono" style="font-size:10.5px">${esc(c.id.slice(0, 60))}</div></td>
+      <td>${esc(c.kind)} · ${c.count}× · ${c.models.length} model(s)</td><td>${esc(c.examples.slice(0, 3).join(', '))}</td>
+      <td><span class="badge ${c.status === 'accepted' ? 'ok' : c.status === 'dismissed' ? '' : 'warn'}">${esc(c.status)}</span></td>
+      <td style="white-space:nowrap">${live(c) ? `<button class="primary" data-c="${esc(c.id)}" data-d="accept">Accept</button> <button class="ghost" data-c="${esc(c.id)}" data-d="dismiss">Dismiss</button>` : `<button class="ghost" data-c="${esc(c.id)}" data-d="reset">Reset</button>`}</td></tr>`).join('')}</tbody></table>`
+      : '<div class="muted" style="margin-top:10px">Nothing yet. Candidates appear after models are exported.</div>');
+  $('sp-cands').querySelectorAll('[data-c]').forEach(b => b.onclick = async () => {
+    try { const r = await plugAct({ action: 'candidate', id: b.dataset.c, decision: b.dataset.d }); if (r.family_file) toast('Family skeleton: ' + r.family_file); await loadCatalog(true); renderCands(); }
+    catch (e) { toast(e.message, true); }
+  });
+}
+function renderRules() {
+  const groups = [...new Set(plugCat.rules.map(r => r.group))];
+  $('sp-rules').innerHTML = `<div class="muted">Rules and conventions the tools apply locally. <span class="badge bad">mandatory</span> must hold · <span class="badge info">check</span> verified automatically · <span class="badge ok">default</span> used unless you say otherwise · <span class="badge warn">convention</span> how things are represented.</div>`
+    + groups.map(g => `<div class="rulegrp">${esc(g)}</div>` + plugCat.rules.filter(r => r.group === g).map(r => `<div class="rule"><div class="row" style="margin:0;gap:8px"><b>${esc(r.title)}</b>${lvBadge(r.level)}</div><div>${esc(r.text)}</div><div class="w mono">${esc(r.where)}</div></div>`).join('')).join('');
+}
+function renderTools() {
+  $('sp-tools').innerHTML = `<div class="muted">Local tools Claude calls instead of writing scripts: <span class="mono">python …/viewer/cad4ai.py &lt;command&gt;</span>. Heavy work on this PC, a few lines of JSON back.</div>
+    <table class="ptable"><thead><tr><th>Command</th><th>Arguments</th><th>What it does</th></tr></thead><tbody>${plugCat.tools.map(t => `<tr><td class="mono">${esc(t.cmd)}</td><td class="mono">${esc(t.args)}</td><td>${esc(t.what)}</td></tr>`).join('')}</tbody></table>`;
+}
+function renderSkills() {
+  $('sp-skills').innerHTML = `<div class="rulegrp">Skills (instructions Claude loads only when the task needs them)</div>`
+    + plugCat.skills.map(k => `<details class="skill"><summary><b>${esc(k.name)}</b> — <span class="muted">${esc(k.description.slice(0, 160))}${k.description.length > 160 ? '…' : ''}</span></summary>${k.scripts.length ? `<div class="muted mono">scripts: ${esc(k.scripts.join(', '))}</div>` : ''}<pre>${esc(k.body)}</pre></details>`).join('')
+    + `<div class="rulegrp">Hooks (run automatically around Claude's tool calls)</div><table class="ptable"><thead><tr><th>Event</th><th>On</th><th>What</th><th>Timeout</th></tr></thead><tbody>${plugCat.hooks.map(h => `<tr><td>${esc(h.event)}</td><td class="mono">${esc(h.matcher)}</td><td>${esc(h.what)}</td><td>${h.timeout ?? ''} s</td></tr>`).join('')}</tbody></table>`;
+}
+function renderData() {
+  const d = plugCat.data;
+  $('sp-data').innerHTML = `<div class="muted">Everything CAD4Ai keeps lives in <span class="mono">${esc(d.home)}</span>. The app folder (<span class="mono">${esc(d.app_folder)}</span>) holds no project data.</div>
+    <table class="ptable"><thead><tr><th>Folder</th><th>Size</th><th>Files</th><th>What</th><th></th></tr></thead><tbody>${d.folders.map(f => `<tr><td class="mono">${esc(f.name)}</td><td>${f.mb} MB</td><td>${f.files}</td><td>${esc(f.what)}</td><td><button class="ghost" data-rev="${esc(f.path)}">Open</button></td></tr>`).join('')}</tbody></table>
+    <div class="row" style="margin-top:10px;gap:6px"><button class="ghost" id="dTrim">Trim cache now</button><button class="ghost" id="dIndex">Rebuild script index</button><button class="ghost" id="dReload">Refresh</button></div>`;
+  $('sp-data').querySelectorAll('[data-rev]').forEach(b => b.onclick = () => plugAct({ action: 'reveal', path: b.dataset.rev }).catch(e => toast(e.message, true)));
+  $('dTrim').onclick = async () => { try { const r = await plugAct({ action: 'trim-cache' }); toast(`Cache trimmed: ${r.removed} files removed.`); await loadCatalog(true); renderData(); } catch (e) { toast(e.message, true); } };
+  $('dIndex').onclick = async () => { try { await plugAct({ action: 'rebuild-index' }); toast('Script index is being rebuilt in the background.'); } catch (e) { toast(e.message, true); } };
+  $('dReload').onclick = async () => { await loadCatalog(true); renderData(); };
+}
+
 $('setClose').onclick = $('setOk').onclick = () => $('settings').classList.remove('open');
 $('settings').onclick = e => { if (e.target.id === 'settings') $('settings').classList.remove('open'); };
 $('setReset').onclick = async () => {

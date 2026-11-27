@@ -13,6 +13,7 @@
   cad4ai lint     S.py [--info]             static check before running (names, fillets, hole sizes, params)
   cad4ai new      S.py [--title ..]         script skeleton: params, assembly, export, expect(), std, cache
   cad4ai partsjson M.step                   fill in missing parts.json entries
+  cad4ai lib      candidates | accept ID | dismiss ID | new ID [title] | families   own library families
   cad4ai std      "ISO 4762 M5x16" | hole M5 | key 30 | list [--step]
   cad4ai vendor   V.step                    mounting interface of a purchased part
   cad4ai fem      M.step PART --fix xmin --load "xmax=0,0,-100" [--material al] [--elements 60000]
@@ -130,6 +131,11 @@ def cmd_after(a):
                      ("" if not bad else ": " + "; ".join(f"{x['a']} x {x['b']} {x['overlap_mm3']} mm3" for x in bad[:6])))
     elif deferred:
         L.append(f"  [expect] no_collisions not checked: {d['parts_n']} parts > --max-parts {a.max_parts}")
+    try:
+        from cadtools import libscan  # parts worth a library family (reported once each)
+        L += ["  " + x for x in libscan.text(libscan.scan(a.step))]
+    except Exception:  # noqa: BLE001
+        pass
     _text(L)
 
 
@@ -140,6 +146,23 @@ def cmd_check(a):
     core.emit({"ok": True, "parts": d["parts_n"], "invalid": d["invalid"],
                "volume": core.r(sum(p["vol"] for p in d["parts"]), 1),
                "vols": {p["name"]: p["vol"] for p in d["parts"]}, "seconds": d.get("seconds", 0)})
+
+
+def cmd_lib(a):
+    """lib candidates | lib accept ID | lib dismiss ID | lib new ID [title] | lib families"""
+    from cadtools import libscan, userlib
+    args = a.args or ["candidates"]
+    if args[0] == "candidates":
+        core.emit({"ok": True, "candidates": libscan.listing(("new", "suggested"))})
+    elif args[0] in ("accept", "dismiss", "reset"):
+        core.emit(libscan.decide(args[1], args[0]))
+    elif args[0] == "new":
+        core.emit({"ok": True, "family_file": userlib.new_family(args[1], " ".join(args[2:]) or None)})
+    elif args[0] == "families":
+        core.emit({"ok": True, "families": [{k: v for k, v in f.items() if not k.startswith("_")} for f in userlib.families(True)],
+                   "folder": userlib.DIR})
+    else:
+        raise ValueError("lib candidates | accept ID | dismiss ID | new ID [title] | families")
 
 
 def cmd_lint(a):
@@ -238,10 +261,26 @@ def cmd_std(a):
     if args[0] == "key":
         core.emit(std.key_for(float(args[1])))
         return
+    from cadtools import parts
+    if args[0] == "find":
+        core.emit({"ok": True, "hits": parts.find(" ".join(args[1:]))})
+        return
+    if args[0] == "info":
+        core.emit(parts.info(" ".join(args[1:])))
+        return
+    if args[0] == "joint":  # std joint M5 12 [tapped [thickness]] [screw=ISO 10642]
+        size, grip = args[1], float(args[2])
+        tapped = "tapped" in args
+        tt = next((float(x) for x in args[args.index("tapped") + 1:args.index("tapped") + 2]), None) if tapped else None
+        scr = next((x.split("=", 1)[1].replace("_", " ") for x in args if x.startswith("screw=")), "ISO 4762")
+        j = parts.bolt_joint(size, grip, nut=None if tapped else "ISO 4032", screw=scr, thread_thickness=tt)
+        core.emit({"ok": True, **j.summary(),
+                   "use": "j = bolt_joint(...); body = j.cut(body, 'clearance'|'tap'|'cbore'|'csk'); j.add_to(assy, 'J1')"})
+        return
     code = " ".join(args)
     out = {"ok": True, "code": code, "dims": std.dims(code),
            "use": f'import os, sys; sys.path.insert(0, os.path.expanduser("~/.CAD4Ai/lib")); '
-                  f'from cadtools.std import part; s = part("{code}")'}
+                  f'from cadtools.parts import place; s = place("{code}", at=(x, y, z), up=(0, 0, 1))'}
     if a.step:
         out["step"] = std.step_file(code)
     core.emit(out)
@@ -302,6 +341,8 @@ def main(argv=None):
     s = add("after", cmd_after, "step")
     s.add_argument("--max-parts", type=int, default=5000)
     add("check", cmd_check, "step")
+    s = add("lib", cmd_lib)
+    s.add_argument("args", nargs="*")
     s = add("lint", cmd_lint, "script")
     s.add_argument("--info", action="store_true")
     s = add("new", cmd_new, "script")

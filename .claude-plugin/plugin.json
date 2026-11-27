@@ -1,6 +1,6 @@
 {
   "name": "CAD4Ai",
-  "version": "0.28.2",
+  "version": "0.30.0",
   "description": "Interactive 3D viewer for STEP (and STL) models next to the chat, opened with /CAD4Ai: select exact B-rep faces, edges and vertices, measure, cut sections, analyse wall thickness, draft and collisions, tweak script parameters, compare versions, animate mechanisms and send pinned notes to Claude. Skills: cad-annotate maps every note to the exact B-rep feature, cad-motion writes joints and animations on request. Sketch pad (/sketch): an infinite canvas with pressure-sensitive pen (Apple Pencil on iPad), marker, eraser, lasso, text and images, live sync between devices, and the Snap tool: box a region, describe the change, Claude redraws only that region for you to accept. Construction canvas (Plátno tab next to the 3D model tab, /canvas, skill cad-canvas): sketch freely, QuickShape+ turns held strokes into exact geometry, trim, snap, dimensions, 9 layers; send a lasso selection to Claude, answer briefing bubbles pinned to the drawing, accept or reject its proposal.",
   "author": { "name": "TheBeckeros" },
   "homepage": "https://github.com/TheBeckeros/CAD4Ai",

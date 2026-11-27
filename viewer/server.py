@@ -124,6 +124,51 @@ def safe_data_dir(path):
     return os.path.join(assist.APP_HOME, "sessions", name, os.path.basename(os.path.abspath(path).rstrip("\\/")))
 
 
+def plugin_action(body, local):
+    """Actions of the Settings tabs (libraries, candidates, data)."""
+    act = body.get("action")
+    try:
+        if act == "open-part":  # a library part as a model tab (STEP cached in ~/.CAD4Ai/cache/std)
+            from cadtools import std
+            p = std.step_file(str(body.get("code") or ""))
+            open_model(p)
+            return {"ok": True, "path": p}
+        if act == "part-info":
+            from cadtools import parts
+            return {"ok": True, "info": parts.info(str(body.get("code") or ""))}
+        if act == "find":
+            from cadtools import parts
+            return {"ok": True, "hits": parts.find(str(body.get("q") or ""))}
+        if act == "candidate":
+            from cadtools import libscan
+            return libscan.decide(str(body.get("id")), str(body.get("decision")))
+        if act == "new-family":
+            from cadtools import userlib
+            return {"ok": True, "file": userlib.new_family(str(body.get("id") or "family"), body.get("title"))}
+        if act == "trim-cache":
+            from cadtools import core
+            return {"ok": True, "removed": core.prune_cache(max_mb=int(body.get("max_mb") or 2000))}
+        if act == "rebuild-index":
+            def go():
+                from cadtools import index
+                index.build()
+            threading.Thread(target=go, daemon=True).start()
+            return {"ok": True, "started": True}
+        if act == "reveal":
+            if not local:
+                return {"ok": False, "error": "only on this computer"}
+            p = os.path.abspath(str(body.get("path") or ""))
+            home = os.path.abspath(assist.APP_HOME)
+            if not (p.lower().startswith(home.lower()) or p.lower().startswith(APP_ROOT.lower())) or not os.path.exists(p):
+                return {"ok": False, "error": "not a CAD4Ai folder"}
+            if os.name == "nt":
+                os.startfile(p)  # noqa: S606 - opens Explorer on a CAD4Ai folder only
+            return {"ok": True}
+        return {"ok": False, "error": f"unknown action {act}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 def clean_app_folder():
     """Move session folders left inside the app folder (older versions wrote <cwd>/.CAD4Ai there) to
     ~/.CAD4Ai/sessions and drop bytecode caches. Runs at server start."""
@@ -1014,6 +1059,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(path)
             if url.path == "/api/settings":
                 return self._send(200, {"values": assist.load_settings(), "defaults": assist.DEFAULTS})
+            if url.path == "/api/plugin/catalog":  # Settings tabs: libraries, rules, tools, skills, hooks, data
+                from cadtools import catalog
+                return self._send(200, catalog.overview())
             if url.path == "/api/collide":  # exact B-rep collisions (cadtools, all cores) for the Checks line
                 cur = current()
                 step = cur.get("step") or (cur.get("path") if (cur.get("path") or "").lower().endswith((".step", ".stp")) else None)
@@ -1350,6 +1398,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if url.path == "/api/settings":
                 return self._send(200, {"values": assist.save_settings(body.get("values") or {})})
+            if url.path == "/api/plugin/action":
+                return self._send(200, plugin_action(body, self.client_address[0] in ("127.0.0.1", "::1")))
             if url.path == "/api/related":
                 cur = current()
                 script = cur.get("script")

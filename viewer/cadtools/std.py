@@ -192,7 +192,12 @@ def dims(code):
                 "groove_static_radial": {"depth": round(d2 * 0.78, 2), "width": round(d2 * 1.35, 2)},
                 "groove_axial_face": {"depth": round(d2 * 0.72, 2), "width": round(d2 * 1.45, 2)},
                 "note": "groove values are typical guidelines (~20-25 % squeeze); check the seal maker's table"}
-    raise ValueError(f"unknown part code: {code}")
+    from .parts import extra_dims  # DIN 985, circlips, heat-set inserts (library V1)
+    try:
+        return extra_dims(code)
+    except (ValueError, KeyError):
+        from . import userlib  # the user's own families (~/.CAD4Ai/library/families)
+        return userlib.dims(code)
 
 
 # ---------------------------------------------------------------- geometry
@@ -269,7 +274,12 @@ def part(code):
         return body
     if std == "ISO 3601":
         return cq.Workplane("XZ").center(d["d1"] / 2 + d["d2"] / 2, 0).circle(d["d2"] / 2).revolve(360, (-d["d1"] / 2 - d["d2"] / 2, 0, 0), (-d["d1"] / 2 - d["d2"] / 2, 1, 0))
-    raise ValueError(f"no geometry for {code}")
+    from .parts import extra_part
+    try:
+        return extra_part(code)
+    except (ValueError, KeyError):
+        from . import userlib
+        return userlib.part(code)
 
 
 def step_file(code):

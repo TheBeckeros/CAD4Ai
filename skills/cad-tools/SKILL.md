@@ -33,6 +33,36 @@ Keep modelling natively: a Python CadQuery script that exports STEP. These tools
 - parts.json: missing entries are added automatically after each export (type, standard, subassembly);
   write only what cannot be guessed (material, special types).
 
+## Standard parts: never model them, call the library (cadtools.parts)
+```python
+from cadtools.parts import place, bolt_joint, drill, info, find
+s = place("ISO 4762 M5x16", at=(10, 0, 8))            # head seated on the point, shank along -up
+b = place("6204", at=(0, 0, 30), up=(1, 0, 0))         # any part, any axis; anchor= picks the point
+j = bolt_joint("M6", grip=12, at=(-25, 0, 12))         # screw+washers+nut, stock length chosen
+j2 = bolt_joint("M6", grip=6, at=(25, 0, 12), nut=None, thread_thickness=10)   # into a thread
+plate = j.cut(plate, "clearance"); base = j2.cut(base, "tap")   # also "cbore", "csk"
+j.add_to(assy, "J1")                                   # names carry ISO no. + size (checks know them)
+plate = drill(plate, at=(0, 0, 5), d=8.0, depth=None, up=(0, 0, 1))  # any hole, any direction
+```
+Families: ISO 4762/4017/10642/7380/4029 screws, ISO 4032/4035 + DIN 985 nuts, ISO 7089 washers,
+ISO 8734 pins, ball bearings (60/62/63/68/69, 6xx), NEMA motors, slot profiles, O-rings, DIN 471/472
+circlips, heat-set inserts. Unsure of the code: `cad4ai std find "zápustný M4"`; dimensions, anchors,
+holes, thread diameters and source/status: `cad4ai std info CODE`; a joint without modelling:
+`cad4ai std joint M6 12 [tapped <thickness>] [screw=ISO_10642]`. Values marked "unverified" are fine for
+layout; say so when the user needs exact catalogue values.
+
+## Growing the library
+- After an export the hook may report `[library] candidate '<title>' ...`: parts the library lacks (profiles,
+  rails, hinges, springs...) or a custom shape repeated 8x / used in 2 models. Ask the user ONCE, in one
+  short question, whether to create that library family; then `cad4ai lib accept "<id>"` (writes a skeleton
+  ~/.CAD4Ai/library/families/<id>.py) or `cad4ai lib dismiss "<id>"`. Do not ask again for the same id.
+- Filling a family: put the sizes the user uses into FAMILY["rows"] with the real source of the values
+  (catalogue, drawing; status "unverified" until checked), write dims() and part() in the library
+  convention (main axis local +Z, bottom at Z=0). It is then found by place()/part()/std info and listed
+  in the viewer's Settings -> Libraries tab. `cad4ai lib families` lists own families.
+- The viewer's Settings dialog shows everything (presets, libraries with tables and 3D preview, candidates,
+  rules, tools, skills & hooks, data): point the user there instead of explaining it in chat.
+
 ## Hooks (automatic, nothing to call)
 - Script run fails -> doctor result arrives with the tool output: failing line, cause, a value that works.
   Apply it instead of guessing.
