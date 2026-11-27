@@ -473,6 +473,28 @@ def library():
     return {"root": root, "current": cur and cur.get("path"), "models": sorted(models.values(), key=by_time)[:80], "canvases": sorted(canvases, key=by_time)[:40]}
 
 
+_MOTION_BUSY = set()
+
+
+def auto_motion(step):
+    """parts.json "motion" keys -> motion.json, regenerated in the background after every rebuild."""
+    try:
+        from cadtools import motion as mo
+        if step in _MOTION_BUSY or not mo.needed(step):
+            return
+    except Exception:  # noqa: BLE001
+        return
+    _MOTION_BUSY.add(step)
+
+    def go():
+        try:
+            subprocess.run([sys.executable, "-B", os.path.join(HERE, "cad4ai.py"), "motion", step],
+                           capture_output=True, timeout=600)
+        finally:
+            _MOTION_BUSY.discard(step)
+    threading.Thread(target=go, daemon=True).start()
+
+
 def current():
     """Current model from latest.json, completed with the actual file state."""
     info = read_json(os.path.join(data_dir(), "latest.json"), {})
@@ -489,6 +511,8 @@ def current():
     if script:
         out["script"] = script
     motion = os.path.splitext(path)[0] + ".motion.json"
+    if step:
+        auto_motion(step)
     if os.path.isfile(motion):
         out["motion"] = motion
         out["motionMtimeMs"] = os.path.getmtime(motion) * 1000

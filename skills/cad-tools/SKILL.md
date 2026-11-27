@@ -32,6 +32,13 @@ Keep modelling natively: a Python CadQuery script that exports STEP. These tools
 - `part("ISO 4762 M5x16")`, `tap_drill`, `nominal` from cadtools.std instead of typed numbers.
 - parts.json: missing entries are added automatically after each export (type, standard, subassembly);
   write only what cannot be guessed (material, special types).
+- Moving parts: put one word in parts.json while modelling, nothing else:
+  `"BTN_": {"motion": "press"}`, `"KNOB": {"motion": "rotate"}`, `"LID": {"motion": "hinge"}`,
+  `"DRAWER": {"motion": "slide"}` (keys are name prefixes, so one line covers all buttons).
+  The PC derives axis, pivot, stroke and limits from the geometry and writes `<model>.motion.json` after every
+  rebuild (also when the user changes a parameter in the viewer): no motion file to write, no tokens.
+  Optional overrides in a dict: `axis` ("X"/"-Z"/[x,y,z]), `origin`, `range` [min,max], `travel`, `on` (carrier
+  part), `drive` {"part", "ratio"}, `group`. The hook prints the derived joints in one line; check it.
 
 ## Standard parts: never model them, call the library (cadtools.parts)
 ```python

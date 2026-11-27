@@ -10,6 +10,12 @@ being worked out. Mention it at most once, in one line, and only after the user 
 design; it costs a lot of tokens, so wait for a clear yes. `<model>.motion.json` next to `<model>.step` gives
 the viewer's **Motion** tab joint sliders, Play / Pause, scrubbing and the joint axes.
 
+**Cheapest first:** buttons, knobs, wheels, lids/doors and drawers need no motion file. Add
+`"motion": "press" | "rotate" | "hinge" | "slide"` to those parts in `<model>.parts.json`; the PC
+generates `<model>.motion.json` (axes, strokes, collision limits, animations) and regenerates it after every
+rebuild (`cad4ai motion M.step` runs it at once). Write joints by hand below only for linkages, gears,
+closed loops or where the generated joint is wrong; a hand-written file (no `"generated"` key) is never overwritten.
+
 Start with the geometry dump instead of writing your own inspection code:
 ```
 python "<this skill's folder>/scripts/joints.py" info <model>.step

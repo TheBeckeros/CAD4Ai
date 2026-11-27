@@ -17,6 +17,7 @@
   cad4ai variants M.step                    design variants side by side (mass, size, collisions, expect)
   cad4ai lib      candidates | accept ID | dismiss ID | new ID [title] | families   own library families
   cad4ai std      "ISO 4762 M5x16" | hole M5 | key 30 | list [--step]
+  cad4ai motion   M.step [--force]          motion.json from parts.json "motion" keys (press/rotate/hinge/slide)
   cad4ai vendor   V.step                    mounting interface of a purchased part
   cad4ai fem      M.step PART --fix xmin --load "xmax=0,0,-100" [--material al] [--elements 60000]
   cad4ai dfm      M.step PART [--process print|mill|mould] [--min-wall 1.2] [--up 0,0,1]
@@ -133,6 +134,15 @@ def cmd_after(a):
                      ("" if not bad else ": " + "; ".join(f"{x['a']} x {x['b']} {x['overlap_mm3']} mm3" for x in bad[:6])))
     elif deferred:
         L.append(f"  [expect] no_collisions not checked: {d['parts_n']} parts > --max-parts {a.max_parts}")
+    try:
+        from cadtools import motion  # parts.json "motion" keys -> motion.json, follows every rebuild
+        r = motion.ensure(a.step)
+        if r and r.get("ok"):
+            L.append(f"  motion: {r['joints']} joints regenerated -> " + "; ".join(r["notes"][:8]))
+        elif r and r.get("error"):
+            L.append(f"  motion: not generated ({r['error']})")
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from cadtools import libscan  # parts worth a library family (reported once each)
         L += ["  " + x for x in libscan.text(libscan.scan(a.step))]
@@ -298,6 +308,11 @@ def cmd_std(a):
     core.emit(out)
 
 
+def cmd_motion(a):
+    from cadtools import motion
+    core.emit(motion.generate(a.step, force=a.force))
+
+
 def cmd_vendor(a):
     from cadtools import vendor
     core.emit(vendor.interface(a.step))
@@ -382,6 +397,8 @@ def main(argv=None):
     s = add("std", cmd_std)
     s.add_argument("args", nargs="*")
     s.add_argument("--step", action="store_true", help="also write a cached STEP")
+    s = add("motion", cmd_motion, "step")
+    s.add_argument("--force", action="store_true", help="overwrite a hand-written motion.json")
     add("vendor", cmd_vendor, "step")
     s = add("fem", cmd_fem, "step", "part")
     s.add_argument("--fix", action="append", required=True)
