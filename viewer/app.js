@@ -3537,30 +3537,41 @@ let appSettings = {}, appDefaults = {};
 const SETTINGS_UI = [
   { sec: 'Notes for Claude (what one note costs)' },
   { k: 'note.parts', label: 'Part names in a note', opts: [['nearby', 'Only near the marked place'], ['all', 'All parts'], ['none', 'None']],
+    t: { nearby: 'ok:Recommended. Saves 5–8k tokens in big assemblies, quality practically the same.', all: 'warn:Quality +0–2 %, cost up to +8k tokens per note. Only if Claude keeps missing distant parts.', none: 'bad:Saves a bit more, but quality −15 %: Claude must guess which parts exist.' },
     x: 'A note lists the assembly’s part names so Claude knows what exists. In a big assembly that is the most expensive line: the panel with ~700 parts costs <em>5–8 thousand tokens</em> per note. “Only near the marked place” keeps the parts around your drawing, selection or markers (max 40) and says how many others exist. Small models (≤ 25 parts) always get all names.' },
   { k: 'note.params', label: 'Parameters in a note', opts: [['related', 'Only related ones'], ['all', 'All'], ['none', 'None']],
+    t: { related: 'ok:Recommended. Small, and Claude still sees what matters.', all: 'warn:Quality +0–3 %, cost +0.5–3k tokens per note on big scripts.', none: 'bad:Saves ~0.5k tokens, quality −10 %: Claude reads values from the script itself (often costs more).' },
     x: 'The values of the script parameters. “Only related ones” sends the parameters that drive the marked part or place (found in the script, the same as <em>Show related parameters</em>), at most as many as set below, and says how many more there are.' },
   { k: 'note.scriptMap', label: 'Script map', bool: true,
+    t: { true: 'ok:Recommended. Saves 8–10k tokens per change, no quality loss.', false: 'bad:Costs 8–10k tokens more per change, quality the same or worse. No reason to turn off.' },
     x: 'Adds the script lines (file:from-to) where the marked parts are built, also in imported modules. Claude reads those few dozen lines instead of the whole script: on the panel (812 lines) that saves roughly <em>8–10 thousand tokens</em> per change.' },
   { k: 'note.screenshot', label: 'Screenshot in a note', bool: true,
+    t: { true: 'ok:Recommended. Claude sees what you mean.', false: 'warn:Saves ~1.5k tokens, quality −5 to −20 % for notes without a selection or markers.' },
     x: 'The picture shows Claude what you mean (about <em>1.5 thousand tokens</em>). Turn it off if your notes always have a selection, measurements or markers that say precisely where.' },
   { k: 'note.modelHint', label: 'Model suggestion', bool: true,
+    t: { true: 'ok:Recommended. One line (~30 tokens), helps you pick a cheaper model.', false: 'warn:Saves ~30 tokens, you lose the hint. Quality unaffected.' },
     x: 'One line in the note with the cheapest Claude model and effort that should do the request on the first try (from the request text, the script size and the part count). A guide only: you switch the model yourself.' },
   { k: 'note.contextFile', label: 'Project context file', bool: true,
+    t: { true: 'ok:Recommended. First note +1–2k tokens, every next one −3–6k tokens. No quality loss.', false: 'warn:Each note on a big script costs 3–6k tokens more (Claude explores again).' },
     x: 'For scripts over 300 lines Claude writes a short <span class="mono">&lt;model&gt;.context.md</span> once (what each function builds, line ranges) and reads it in later notes instead of exploring the script. The first note costs a bit more, the following ones less.' },
   { sec: 'Related parameters' },
   { k: 'related.byValue', label: 'Match by dimension', bool: true,
+    t: { true: 'ok:Recommended. Finds more right parameters, costs nothing.', false: 'warn:Some related parameters missed, quality −3 %. No tokens saved.' },
     x: 'Besides tracing the script, a parameter whose value equals the clicked size (a Ø11 hole → <span class="mono">FL_HOLE_D = 11</span>, also 2× and ½×) counts as related.' },
   { k: 'related.max', label: 'How many in a note', num: [3, 40],
+    t: n => n === 12 ? 'ok:Recommended (12). Enough for nearly every change.' : n < 12 ? `warn:Saves ~${(12 - n) * 25} tokens, quality −${Math.min(15, (12 - n) * 2)} %: the right parameter may be cut off.` : `warn:Costs ~${(n - 12) * 25} tokens more, quality +0–1 %.`,
     x: 'Upper limit of related parameters sent with a note.' },
   { sec: 'After a rebuild (Params tab)' },
   { k: 'checks.afterRebuild', label: 'Checks', opts: [['basic', 'Validity and volume'], ['full', '+ collisions'], ['off', 'Off']],
+    t: { basic: 'ok:Recommended. Catches broken solids in ~5 s, no tokens.', full: 'warn:No tokens, just slower (+5–30 s). Worth it when parts move.', off: 'bad:Faster, but broken geometry goes unnoticed. Saves no tokens.' },
     x: 'Runs on this computer, <em>no tokens</em>. “Validity and volume” checks every solid (BRepCheck) and the volume change against the last rebuild (about 5 s for the panel). “+ collisions” also runs the collision analysis of the Analyze tab and colours the touching places.' },
   { sec: 'Storage' },
   { k: 'history.keep', label: 'Versions kept per model', num: [5, 500],
+    t: n => n === 30 ? 'ok:Recommended (30). Does not affect tokens.' : n < 30 ? 'warn:Less disk space, fewer versions to go back to. Tokens unaffected.' : 'warn:More versions to go back to, more disk space. Tokens unaffected.',
     x: 'Every rebuild or export stores a version (STEP + script) in <span class="mono">~/.CAD4Ai/history</span>: one place for all models and sessions, never inside a project or the app folder. Older versions beyond this number are deleted. One version of a large assembly can take several MB.' },
   { sec: 'Quick change (right-click menu)' },
   { k: 'quick.screenshot', label: 'Screenshot with a quick change', bool: true,
+    t: { false: 'ok:Recommended. The clicked face says where; ~1.5k tokens saved.', true: 'warn:Cost +1.5k tokens, quality +0–5 % (only helps for vague sentences).' },
     x: 'A quick change sends the clicked face, the related parameters and your sentence. Without the picture it is the cheapest way to ask Claude for a small edit.' },
 ];
 async function loadSettings() {
@@ -3570,18 +3581,26 @@ async function saveSetting(k, v) {
   appSettings[k] = v;
   try { appSettings = (await api('/api/settings', { values: { [k]: v } })).values; } catch (e) { toast('Saving the setting failed: ' + e.message, true); }
 }
+/** Coloured line under a setting: recommended, or what you trade (quality vs. tokens). */
+function tradeNote(o, v) {
+  if (!o.t) return '';
+  const raw = typeof o.t === 'function' ? o.t(+v) : o.t[String(v)];
+  if (!raw) return '';
+  const [cls, ...rest] = raw.split(':');
+  return `<div class="t ${cls}">${cls === 'ok' ? '✓ ' : '⚠ '}${esc(rest.join(':'))}</div>`;
+}
 function renderSettings() {
   $('setList').innerHTML = SETTINGS_UI.map(o => {
     if (o.sec) return `<div class="set-sec">${esc(o.sec)}</div>`;
     const v = appSettings[o.k], id = 'set_' + o.k.replace('.', '_');
     const ctl = o.bool ? `<input type="checkbox" id="${id}" data-k="${o.k}" ${v ? 'checked' : ''}>`
       : o.num ? `<input type="number" id="${id}" data-k="${o.k}" min="${o.num[0]}" max="${o.num[1]}" value="${v}" style="width:70px">`
-      : `<select id="${id}" data-k="${o.k}">${o.opts.map(([val, t]) => `<option value="${val}" ${v === val ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
-    return `<div class="set"><div class="h"><label for="${id}"><b>${esc(o.label)}</b></label>${ctl}</div><div class="x">${o.x}</div></div>`;
+      : `<select id="${id}" data-k="${o.k}">${o.opts.map(([val, t]) => `<option value="${val}" ${v === val ? 'selected' : ''}>${esc(t)}${appDefaults[o.k] === val ? ' (recommended)' : ''}</option>`).join('')}</select>`;
+    return `<div class="set"><div class="h"><label for="${id}"><b>${esc(o.label)}</b></label>${ctl}</div>${tradeNote(o, v)}<div class="x">${o.x}</div></div>`;
   }).join('');
   $('setList').querySelectorAll('[data-k]').forEach(c => c.onchange = () => {
     const o = SETTINGS_UI.find(x => x.k === c.dataset.k);
-    saveSetting(o.k, o.bool ? c.checked : o.num ? Math.max(o.num[0], Math.min(o.num[1], Math.round(+c.value || 0))) : c.value);
+    saveSetting(o.k, o.bool ? c.checked : o.num ? Math.max(o.num[0], Math.min(o.num[1], Math.round(+c.value || 0))) : c.value).then(renderSettings);
   });
 }
 $('bSettings').onclick = async () => { await loadSettings(); renderSettings(); $('settings').classList.add('open'); };
@@ -3699,9 +3718,21 @@ async function afterRebuildChecks() {
       out.push(`${r.seconds} s`);
     }
     if (mode === 'full' && model.parts.length > 1) {
-      runCollisions();
-      const n = anaState.colliding?.length ?? 0;
-      out.push(n ? `✗ ${n} colliding pair${n > 1 ? 's' : ''} (Analyze tab)` : '✓ no collisions');
+      runCollisions();  // mesh check: highlights pairs in the Analyze tab
+      el.textContent = out.join(' · ') + ' · exact collisions…';
+      try {
+        const c = await api('/api/collide');  // exact B-rep check (cad4ai collide, all cores)
+        if (!c.ok) out.push(`✗ collision check failed: ${c.error || '?'}`);
+        else {
+          const n = c.collisions.length;
+          out.push(n ? `✗ ${n} colliding pair${n > 1 ? 's' : ''}: ${c.collisions.slice(0, 3).map(x => `${x.a}×${x.b} ${fmtn(x.overlap_mm3, 1)} mm³`).join(', ')}`
+                     : `✓ no collisions (${c.pairs_checked} pairs, B-rep)`);
+          if (c.expected_fastener_overlaps) out.push(`${c.expected_fastener_overlaps} fastener overlaps ignored`);
+        }
+      } catch (e) {
+        const n = anaState.colliding?.length ?? 0;
+        out.push(n ? `✗ ${n} colliding pair${n > 1 ? 's' : ''} (Analyze tab)` : '✓ no collisions');
+      }
     }
     el.textContent = out.join(' · ');
     el.style.color = el.textContent.includes('✗') ? 'var(--bad)' : '';

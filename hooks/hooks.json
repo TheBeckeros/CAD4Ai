@@ -1,1 +1,14 @@
-{ "modules": ["./register.tsx"] }
+{
+  "modules": ["./register.tsx"],
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" start", "timeout": 10 } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Read", "hooks": [ { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" pre", "timeout": 10 } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Bash|PowerShell", "hooks": [ { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/viewer/cc_hook.py\" post", "timeout": 180 } ] }
+    ]
+  }
+}

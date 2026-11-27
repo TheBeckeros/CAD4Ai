@@ -989,6 +989,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(path)
             if url.path == "/api/settings":
                 return self._send(200, {"values": assist.load_settings(), "defaults": assist.DEFAULTS})
+            if url.path == "/api/collide":  # exact B-rep collisions (cadtools, all cores) for the Checks line
+                cur = current()
+                step = cur.get("step") or (cur.get("path") if (cur.get("path") or "").lower().endswith((".step", ".stp")) else None)
+                if not step:
+                    return self._send(404, {"error": "no STEP model"})
+                r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "cad4ai.py"), "collide", step, "--limit", "0"],
+                                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
+                                   creationflags=0x08000000 if os.name == "nt" else 0)
+                try:
+                    return self._send(200, json.loads(r.stdout.strip().splitlines()[-1]))
+                except (ValueError, IndexError):
+                    return self._send(200, {"ok": False, "error": (r.stderr or "collide failed")[-300:]})
             if url.path == "/api/check":
                 cur = current()
                 step = cur.get("step") or (cur.get("path") if (cur.get("path") or "").lower().endswith((".step", ".stp")) else None)

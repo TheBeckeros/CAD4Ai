@@ -27,7 +27,7 @@ DEFAULTS = {
     "note.scriptMap": True,
     "note.screenshot": True,
     "note.modelHint": True,
-    "note.contextFile": False,
+    "note.contextFile": True,
     "related.byValue": True,
     "related.max": 12,
     "checks.afterRebuild": "basic",   # off | basic | full

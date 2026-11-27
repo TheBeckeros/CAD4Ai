@@ -1,0 +1,280 @@
+"""cad4ai - local CAD tools for Claude: heavy work on this PC, a few lines of JSON back.
+
+  cad4ai summary  M.step [--full]           parts, sizes, masses, hole patterns (text)  | --json for all
+  cad4ai diff     M.step                    what changed since the previous version of this model
+  cad4ai collide  M.step [--limit 0.5] [--parts A B]   all-pairs collisions / clearances (all cores)
+  cad4ai holes    M.step PART               holes, patterns, shafts, planes of one part
+  cad4ai dist     M.step A B                minimum distance between two parts
+  cad4ai section  M.step "Z=20" [--parts ..] section areas + SVG
+  cad4ai mass     M.step                    mass table (parts.json materials)
+  cad4ai verify   M.step [--level 2|3] [--script S.py]   B-rep validity + collisions (+ DFM, FEM if asked)
+  cad4ai after    M.step                    short report after a rebuild (diff + validity + new collisions)
+  cad4ai doctor   S.py                      run a failing script, find the line, bisect fillet/chamfer
+  cad4ai std      "ISO 4762 M5x16" | hole M5 | key 30 | list [--step]
+  cad4ai vendor   V.step                    mounting interface of a purchased part
+  cad4ai fem      M.step PART --fix xmin --load "xmax=0,0,-100" [--material al] [--elements 60000]
+  cad4ai dfm      M.step PART [--process print|mill|mould] [--min-wall 1.2] [--up 0,0,1]
+  cad4ai optimize S.py --vary W=1..6 --minimize mass [--subject "fem.max_disp_mm<0.2"] [--fem "..."]
+  cad4ai views    M.step [--highlight A B] [--size 900]   one labelled 2x2 PNG
+  cad4ai index    [folders..]  /  cad4ai find "text"      search your own CadQuery scripts
+Results are cached (~/.CAD4Ai/cache); a second call on an unchanged file is instant.
+"""
+import argparse
+import json
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:  # noqa: BLE001
+    pass
+
+from cadtools import core  # noqa: E402
+
+
+def _text(lines):
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def cmd_summary(a):
+    from cadtools import digest
+    d = digest.digest(a.step)
+    digest.remember(a.step, d)
+    if a.json:
+        core.emit(d)
+    else:
+        _text(digest.summary_text(d, 400 if a.full else 40))
+
+
+def cmd_diff(a):
+    from cadtools import digest
+    d = digest.digest(a.step)
+    prev = digest.previous(a.step)
+    digest.remember(a.step, d)
+    _text(digest.diff(prev, d))
+
+
+def cmd_after(a):
+    """Compact report for hooks / after a rebuild."""
+    from cadtools import digest, collide
+    d = digest.digest(a.step)
+    prev = digest.previous(a.step)
+    digest.remember(a.step, d)
+    L = [f"[CAD4Ai] {os.path.basename(a.step)}: {d['parts_n']} parts, {d['size']} mm, {d['mass_g']} g"]
+    L += ["  " + x for x in digest.diff(prev, d)[:15]]
+    if d["invalid"]:
+        L.append("  INVALID B-rep: " + ", ".join(d["invalid"][:10]))
+    if d["parts_n"] > 1 and d["parts_n"] <= a.max_parts:
+        c = collide.check(a.step, 0.0)
+        if c["collisions"]:
+            L.append(f"  COLLISIONS ({len(c['collisions'])}): " + "; ".join(
+                f"{x['a']}×{x['b']} {x['overlap_mm3']} mm3 @{x['at']}" for x in c["collisions"][:8]))
+        else:
+            L.append(f"  collisions: none ({c['pairs_checked']} pairs" +
+                     (f", {c['expected_fastener_overlaps']} fastener overlaps ignored" if c["expected_fastener_overlaps"] else "") + ")")
+    _text(L)
+
+
+def cmd_collide(a):
+    from cadtools import collide
+    core.emit(collide.check(a.step, a.limit, a.parts))
+
+
+def cmd_holes(a):
+    from cadtools import digest
+    inst = core.find(core.load(a.step), [a.part])
+    core.emit({"ok": True, "parts": [digest.part_digest(i) for i in inst[:10]]})
+
+
+def cmd_dist(a):
+    from cadtools import measure
+    core.emit(measure.distance(a.step, a.a, a.b))
+
+
+def cmd_section(a):
+    from cadtools import measure
+    core.emit(measure.section(a.step, a.plane, a.parts))
+
+
+def cmd_mass(a):
+    from cadtools import measure
+    core.emit(measure.mass_table(a.step))
+
+
+def cmd_verify(a):
+    """CLAUDE.md levels: 2 = validity + collisions + dimensions; 3 = + wall thickness, mass, FEM if --fem."""
+    from cadtools import digest, collide, dfm, fem
+    d = digest.digest(a.step)
+    out = {"ok": True, "level": a.level, "valid": not d["invalid"], "invalid": d["invalid"], "size": d["size"],
+           "mass_g": d["mass_g"], "parts": d["parts_n"]}
+    c = collide.check(a.step, a.limit)
+    out["collisions"] = c["collisions"][:20]
+    out["fastener_overlaps"] = c["expected_fastener_overlaps"]
+    out["clearance_below_limit"] = c["clearance_below_limit"][:10]
+    out["dimensions"] = {p["name"]: p["size"] for p in d["parts"][:60]}
+    if a.level >= 3:
+        walls = {}
+        for p in d["parts"]:
+            if p.get("type") in ("fastener", "bearing", "purchased", "seal", "spring", "electrical"):
+                continue
+            try:
+                r = dfm.analyse(a.step, p["name"], a.process, samples=2500)
+                walls[p["name"]] = {"min_wall": r["wall"]["min"], "p5": r["wall"]["p5"], "thin": r["wall"]["thin_spots"][:3]}
+            except Exception as e:  # noqa: BLE001
+                walls[p["name"]] = f"error {type(e).__name__}"
+            if len(walls) >= a.max_parts:
+                break
+        out["walls"] = walls
+        out["mass_table"] = {p["name"]: p["mass_g"] for p in sorted(d["parts"], key=lambda p: -p["mass_g"])[:20]}
+        if a.fem:
+            from cadtools.optimize import parse_fem
+            fs = parse_fem(a.fem)
+            out["fem"] = fem.solve(a.step, fs["part"], fs["fix"], fs["load"], material=fs.get("material"),
+                                   elements=fs.get("elements", 60000))
+    out["ok"] = out["valid"] and not out["collisions"]
+    core.emit(out)
+
+
+def cmd_doctor(a):
+    from cadtools import doctor
+    core.emit(doctor.diagnose(a.script, a.workers))
+
+
+def cmd_std(a):
+    from cadtools import std
+    args = a.args
+    if not args or args[0] == "list":
+        core.emit(std.catalogue())
+        return
+    if args[0] == "hole":
+        core.emit(std.hole(args[1], args[2] if len(args) > 2 else "all"))
+        return
+    if args[0] == "key":
+        core.emit(std.key_for(float(args[1])))
+        return
+    code = " ".join(args)
+    out = {"ok": True, "code": code, "dims": std.dims(code),
+           "use": f'import sys; sys.path.insert(0, r"{HERE}"); from cadtools.std import part; s = part("{code}")'}
+    if a.step:
+        out["step"] = std.step_file(code)
+    core.emit(out)
+
+
+def cmd_vendor(a):
+    from cadtools import vendor
+    core.emit(vendor.interface(a.step))
+
+
+def cmd_fem(a):
+    from cadtools import fem
+    core.emit(fem.solve(a.step, a.part, a.fix, a.load, material=a.material, elements=a.elements, gravity=a.gravity))
+
+
+def cmd_dfm(a):
+    from cadtools import dfm
+    core.emit(dfm.analyse(a.step, a.part, a.process, a.min_wall, tuple(map(float, a.up.split(","))), a.samples))
+
+
+def cmd_optimize(a):
+    from cadtools import optimize
+    vary = optimize.parse_vary(a.vary)
+    obj, sense = (a.minimize, 1) if a.minimize else (a.maximize, -1)
+    fs = optimize.parse_fem(a.fem) if a.fem else None
+    core.emit(optimize.optimise(a.script, vary, obj, sense, a.subject or [], fs, a.budget, a.workers, a.apply))
+
+
+def cmd_views(a):
+    from cadtools import views
+    core.emit(views.render(a.step, a.size, a.highlight))
+
+
+def cmd_index(a):
+    from cadtools import index
+    core.emit(index.build(a.folders or None))
+
+
+def cmd_find(a):
+    from cadtools import index
+    core.emit(index.find(" ".join(a.query), a.k))
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="cad4ai", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp = p.add_subparsers(dest="cmd", required=True)
+
+    def add(name, fn, *args):
+        s = sp.add_parser(name)
+        for x in args:
+            s.add_argument(x)
+        s.set_defaults(fn=fn)
+        return s
+    s = add("summary", cmd_summary, "step")
+    s.add_argument("--full", action="store_true")
+    s.add_argument("--json", action="store_true")
+    add("diff", cmd_diff, "step")
+    s = add("after", cmd_after, "step")
+    s.add_argument("--max-parts", type=int, default=150)
+    s = add("collide", cmd_collide, "step")
+    s.add_argument("--limit", type=float, default=0.5)
+    s.add_argument("--parts", nargs="*")
+    add("holes", cmd_holes, "step", "part")
+    add("dist", cmd_dist, "step", "a", "b")
+    s = add("section", cmd_section, "step", "plane")
+    s.add_argument("--parts", nargs="*")
+    add("mass", cmd_mass, "step")
+    s = add("verify", cmd_verify, "step")
+    s.add_argument("--level", type=int, default=2)
+    s.add_argument("--limit", type=float, default=0.2)
+    s.add_argument("--process", default="print")
+    s.add_argument("--fem")
+    s.add_argument("--max-parts", type=int, default=12)
+    s = add("doctor", cmd_doctor, "script")
+    s.add_argument("--workers", type=int)
+    s = add("std", cmd_std)
+    s.add_argument("args", nargs="*")
+    s.add_argument("--step", action="store_true", help="also write a cached STEP")
+    add("vendor", cmd_vendor, "step")
+    s = add("fem", cmd_fem, "step", "part")
+    s.add_argument("--fix", action="append", required=True)
+    s.add_argument("--load", action="append", default=[])
+    s.add_argument("--material")
+    s.add_argument("--elements", type=int, default=60000)
+    s.add_argument("--gravity", action="store_true")
+    s = add("dfm", cmd_dfm, "step", "part")
+    s.add_argument("--process", default="print", choices=["print", "mill", "mould"])
+    s.add_argument("--min-wall", type=float)
+    s.add_argument("--up", default="0,0,1")
+    s.add_argument("--samples", type=int, default=6000)
+    s = add("optimize", cmd_optimize, "script")
+    s.add_argument("--vary", action="append", required=True)
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--minimize")
+    g.add_argument("--maximize")
+    s.add_argument("--subject", action="append")
+    s.add_argument("--fem")
+    s.add_argument("--budget", type=int, default=30)
+    s.add_argument("--workers", type=int)
+    s.add_argument("--apply", action="store_true")
+    s = add("views", cmd_views, "step")
+    s.add_argument("--highlight", nargs="*")
+    s.add_argument("--size", type=int, default=900)
+    s = add("index", cmd_index)
+    s.add_argument("folders", nargs="*")
+    s = add("find", cmd_find)
+    s.add_argument("query", nargs="+")
+    s.add_argument("-k", type=int, default=6)
+    a = p.parse_args(argv)
+    try:
+        a.fn(a)
+    except SystemExit:
+        raise
+    except Exception as e:  # noqa: BLE001
+        core.emit({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
