@@ -5,8 +5,9 @@ description: Use only when the user asks for motion, animation, kinematics, rang
 
 # Motion and kinematics for the CAD4Ai viewer
 
-Only on request: never write a motion file unasked, and do not start it while the design is still
-being worked out. Mention it at most once, in one line, and only after the user has confirmed the
+The `"motion"` keys in `<model>.parts.json` (below) are written while modelling, unasked, for every part that
+plainly moves; they cost a few tokens and need no request. Everything else here is only on request: never write a
+motion file by hand unasked, and do not start it while the design is still being worked out. Mention it at most once, in one line, and only after the user has confirmed the
 design; it costs a lot of tokens, so wait for a clear yes. `<model>.motion.json` next to `<model>.step` gives
 the viewer's **Motion** tab joint sliders, Play / Pause, scrubbing and the joint axes.
 
