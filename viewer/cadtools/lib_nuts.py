@@ -144,7 +144,11 @@ def _cap(tab):
         body = S.chamfered_prism(cq, s, 0, mh, top=False, bottom=True)
         R = 0.95 * s / 2
         zt = h
-        dome = F.revolve([(0, mh - 0.01), (R, mh - 0.01), ("arc", (R * math.cos(math.pi / 4), mh + (zt - mh) * math.sin(math.pi / 4)), (0, zt))])
+        z0 = mh - 0.01
+        zc = (R * R + z0 * z0 - zt * zt) / (2 * (z0 - zt))       # sphere centre on the axis through both points
+        rs = zt - zc
+        am = (math.atan2(z0 - zc, R) + math.pi / 2) / 2
+        dome = F.revolve([(0, z0), (R, z0), ("arc", (rs * math.cos(am), zc + rs * math.sin(am)), (0, zt))])
         body = body.union(dome, clean=True)
         # blind threaded bore depth t
         tool = S._revolve(cq, [(0, -0.5), (1.08 * d["d"] / 2 + 0.87, -0.5), (d["tap"] / 2, (1.08 * d["d"] / 2 - d["tap"] / 2) / 1.732)]
