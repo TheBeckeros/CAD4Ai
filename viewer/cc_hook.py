@@ -29,7 +29,34 @@ SKIP = {".git", "node_modules", "__pycache__", "venv", ".venv", ".CAD4Ai", "hist
 PY_IN_CMD = re.compile(r"\"([^\"]+\.py)\"|'([^']+\.py)'|(\S+\.py)\b")
 
 
+CTX = {"mode": "", "cwd": ""}
+LOG = os.path.join(APP_HOME, "cache", "hook", "log.jsonl")
+
+
+def log(kind, text):
+    """What the hooks hand to Claude, for the viewer's Checks window (Hook log). Rotated at 2 MB."""
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        if os.path.isfile(LOG) and os.path.getsize(LOG) > 2_000_000:
+            os.replace(LOG, LOG + ".1")
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"t": time.time(), "mode": CTX["mode"], "kind": kind, "cwd": CTX["cwd"],
+                                "chars": len(text), "text": text[:3000]}, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
 def out(obj):
+    hs = obj.get("hookSpecificOutput", {})
+    txt = hs.get("additionalContext") or hs.get("permissionDecisionReason") or ""
+    kind = "deny" if hs.get("permissionDecision") == "deny" else CTX["mode"]
+    if "[CAD4Ai doctor]" in txt:
+        kind = "doctor"
+    elif "[lint]" in txt:
+        kind = "lint"
+    elif "[CAD4Ai]" in txt:
+        kind = "checks"
+    log(kind, txt)
     sys.stdout.write(json.dumps(obj, ensure_ascii=False))
 
 
@@ -255,6 +282,7 @@ def main():
         ev = json.load(sys.stdin)
     except ValueError:
         ev = {}
+    CTX.update(mode=mode, cwd=ev.get("cwd") or os.getcwd())
     {"start": start, "pre": pre, "post": post, "edit": edit}.get(mode, lambda e: None)(ev)
 
 

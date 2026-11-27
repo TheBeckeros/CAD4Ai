@@ -2851,11 +2851,27 @@ $('bNote').onclick = () => openNote();
 $('bSide').onclick = () => { $('side').classList.toggle('hidden'); };
 $('bParts').onclick = () => { $('pside').classList.toggle('hidden'); };
 if (innerWidth < 640) $('side').classList.add('hidden');
-document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + b.dataset.tab));
+// Right panel: a thin rail of icons; clicking an icon opens its details, clicking the open one closes them.
+$('side').classList.add('rail');
+document.querySelectorAll('#tabs button').forEach(b => {
+  if (!b.title) b.title = b.textContent.replace(/\s+\d+\s*$/, '').trim();
+  b.onclick = () => {
+    const was = b.classList.contains('on') && !$('side').classList.contains('rail');
+    document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + b.dataset.tab));
+    $('side').classList.toggle('rail', was);
+  };
 });
-function openTab(name) { document.querySelector(`#tabs button[data-tab="${name}"]`)?.click(); $('side').classList.remove('hidden'); }
+function openTab(name, expand = true) {
+  const b = document.querySelector(`#tabs button[data-tab="${name}"]`);
+  if (!b) return;
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + name));
+  if (expand) $('side').classList.remove('hidden', 'rail');
+}
+// zero counters do not show a badge on the rail
+new MutationObserver(() => document.querySelectorAll('#tabs .n').forEach(n => n.toggleAttribute('data-zero', n.textContent.trim() === '0'))).observe($('tabs'), { subtree: true, childList: true, characterData: true });
+document.querySelectorAll('#tabs .n').forEach(n => n.toggleAttribute('data-zero', n.textContent.trim() === '0'));
 
 // --- selection
 $('selClear').onclick = clearSelection;
@@ -3149,7 +3165,7 @@ function setMotionDef(def, error, keep) {
   $('motionEmpty').style.display = motion.def ? 'none' : '';
   $('motionBody').style.display = motion.def || motion.error ? '' : 'none';
   $('nJoints').textContent = motion.def?.joints.length ?? 0;
-  if (!show && $('tab-motion').classList.contains('on')) openTab('sel');
+  if (!show && $('tab-motion').classList.contains('on')) openTab('sel', false);
   if (motion.def && !had) toast(`Motion: ${motion.def.joints.length} joint${motion.def.joints.length > 1 ? 's' : ''}, see the Motion tab`);
   renderMotion(); applyMotion();
 }
@@ -3884,3 +3900,249 @@ $('swRun').onclick = async () => {
   } catch (e) { $('swInfo').textContent = 'Failed: ' + e.message; }
   finally { $('swRun').disabled = false; }
 };
+
+
+// ============================================================== windows: Checks · Compute · System
+// Full-size pages over the 3D view, opened from the Window tabs at the top; the 3D model stays loaded.
+const ovGroup = new THREE.Group(); ovGroup.renderOrder = 20; scene.add(ovGroup);
+function ovClear() { for (const o of [...ovGroup.children]) { ovGroup.remove(o); o.geometry?.dispose(); o.material?.dispose(); } $('ovBar').style.display = 'none'; }
+function ovShow(label) { $('ovBar').style.display = ''; $('ovText').textContent = label; }
+function ovMarker(p, color = 0xe5655a, size = 14) {
+  const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+  const m = new THREE.Points(g, new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: false }));
+  m.renderOrder = 21; ovGroup.add(m);
+}
+function heat(t) { // blue → cyan → green → yellow → red
+  t = Math.max(0, Math.min(1, t));
+  const c = [[0.2, 0.3, 1], [0, 0.9, 1], [0.2, 0.9, 0.2], [1, 0.9, 0.1], [1, 0.15, 0.1]];
+  const x = t * 4, i = Math.min(3, Math.floor(x)), f = x - i;
+  return c[i].map((v, k) => v + (c[i + 1][k] - v) * f);
+}
+function flyToPoint(p, r) {
+  fitTo(new THREE.Sphere(new THREE.Vector3(p[0], p[1], p[2]), Math.max(r || 0, model.radius * 0.08)));
+}
+function showWin(name) {
+  document.querySelectorAll('.pages [data-win]').forEach(a => a.classList.toggle('on', a.dataset.win === name));
+  document.querySelector('.pages a[href="/"]').classList.toggle('on', !name);
+  $('win').style.display = name ? '' : 'none';
+  if (name) ({ checks: renderChecksWin, compute: renderComputeWin, system: renderSystemWin })[name]();
+}
+document.querySelectorAll('.pages [data-win]').forEach(a => a.onclick = e => { e.preventDefault(); showWin(a.dataset.win); });
+document.querySelector('.pages a[href="/"]').addEventListener('click', e => { if ($('win').style.display !== 'none') { e.preventDefault(); showWin(null); } });
+$('ovClear').onclick = ovClear;
+const back3d = () => showWin(null);
+async function runJob(body, el, label) {
+  el.innerHTML = `<div class="muted">${esc(label || 'Computing')} on this computer… <span class="spin"></span></div>`;
+  const r = await api('/api/job', body);
+  if (!r.ok) throw new Error(r.error || 'could not start');
+  for (;;) {
+    await new Promise(res => setTimeout(res, 900));
+    const j = await api('/api/job?id=' + r.id);
+    if (j.state === 'gone') throw new Error('job lost (server restarted?)');
+    if (j.state === 'done') { if (j.result && j.result.ok === false) throw new Error(j.result.error || 'failed'); return { ...j.result, _s: j.seconds }; }
+    el.querySelector('.muted').firstChild.textContent = `${label || 'Computing'} on this computer… ${Math.round((Date.now() / 1000) - j.t0)} s `;
+  }
+}
+const card = (title, body, open = true) => `<details class="wcard" ${open ? 'open' : ''}><summary>${title}</summary><div class="wc">${body}</div></details>`;
+const tokens = chars => Math.round(chars / 3.6);
+
+// ---- Checks
+let lastReport = null;
+async function renderChecksWin(force) {
+  const w = $('winBody');
+  if (!model.info) { w.innerHTML = '<div class="muted">No model open.</div>'; return; }
+  w.innerHTML = `<div class="whead"><h3>Checks</h3><span class="muted">${esc(model.info.name || '')}</span><span class="grow"></span><button class="ghost" id="wcRefresh">Refresh</button><button class="primary" id="wcBack">3D model</button></div><div id="wcOut"></div><div id="wcLog"></div>`;
+  $('wcBack').onclick = back3d;
+  $('wcRefresh').onclick = () => { lastReport = null; renderChecksWin(true); };
+  renderHookLog();
+  try {
+    if (!lastReport || lastReport.model !== (model.info.step || model.info.path) || force) lastReport = await runJob({ tool: 'report' }, $('wcOut'), 'Reading the checks');
+  } catch (e) { if ($('wcOut')) $('wcOut').innerHTML = `<div class="muted">${esc(e.message)}</div>`; return; }
+  if (!$('wcOut')) return; // the window was switched meanwhile
+  const r = lastReport, c = r.collisions || {};
+  const coll = (c.collisions || []).map((x, i) => `<tr><td>${esc(x.a)} × ${esc(x.b)}</td><td>${x.overlap_mm3} mm³</td><td>${esc(x.note || '')}</td><td><button class="ghost" data-cp="${i}">Show</button></td></tr>`).join('');
+  const ok = b => `<span class="badge ${b ? 'ok' : 'bad'}">${b ? 'OK' : 'FAIL'}</span>`;
+  let html = `<div class="kpis"><div><b>${r.parts_n}</b><span>parts</span></div><div><b>${r.size.map(v => fmtn(v, 1)).join(' × ')}</b><span>mm</span></div><div><b>${fmtn(r.mass_g / 1000, 2)}</b><span>kg</span></div>
+    <div><b>${(c.collisions || []).length}</b><span>collisions</span></div><div><b>${r.invalid.length}</b><span>invalid solids</span></div><div><b>${r.expect ? r.expect.ok + '/' + r.expect.n : '—'}</b><span>expect()</span></div></div>`;
+  html += card(`Collisions ${ok(!(c.collisions || []).length)}`, (coll ? `<table class="ptable"><thead><tr><th>Parts</th><th>Overlap</th><th>Note</th><th></th></tr></thead><tbody>${coll}</tbody></table>` : '<div class="muted">No collisions.</div>')
+    + `<div class="muted" style="margin-top:6px">${c.pairs_checked ?? 0} pairs checked (${c.pairs_reused ?? 0} reused) · ${c.expected_fastener_overlaps ?? 0} thread engagements (expected) · ${c.expected_flexible_contacts ?? 0} cable/strap contacts · ${Object.keys(c.self_overlaps || {}).length} parts made of overlapping solids · ${c.touching_n ?? 0} touching pairs</div>`
+    + ((c.fastener_overlaps || []).length ? `<div style="margin-top:6px"><button class="ghost" id="wcThreads">Show thread engagements in 3D</button></div>` : ''));
+  const ex = r.expect;
+  html += card(`Design intent – expect() ${ex ? ok(ex.ok === ex.n && (r.expect_deferred || []).every(d => d.ok)) : ''}`, ex
+    ? `<pre class="wpre">${esc(ex.text)}</pre>${(r.expect_deferred || []).map(d => `<div>${ok(d.ok)} ${esc(d.rule)} ${esc(d.bad.join('; '))}</div>`).join('')}`
+    : '<div class="muted">The script has no expect() lines (or this file was not exported by it). Ask Claude to add them for the sizes you care about.</div>', !!ex);
+  html += card('Change since the previous version', r.diff.length ? `<pre class="wpre">${esc(r.diff.join('\n'))}</pre>` : '<div class="muted">No previous version to compare (or nothing changed).</div>', r.diff.length > 0);
+  if ((r.guard || []).length) html += card('<span class="badge warn">Unexpected changes</span>', `<pre class="wpre">${esc(r.guard.join('\n'))}</pre>`);
+  if (r.lint) html += card(`Script lint ${ok(!r.lint.filter(l => l.level !== 'info').length)}`, r.lint.length
+    ? `<div class="muted mono">${esc(r.script)}</div><table class="ptable"><tbody>${r.lint.map(l => `<tr><td>${l.line}</td><td><span class="badge ${l.level === 'error' ? 'bad' : l.level === 'warn' ? 'warn' : ''}">${esc(l.level)}</span></td><td>${esc(l.msg)}</td></tr>`).join('')}</tbody></table>`
+    : '<div class="muted">No issues.</div>', r.lint.some(l => l.level !== 'info'));
+  if ((r.candidates || []).length) html += card('Library candidates from this model', r.candidates.map(k => `<div>• <b>${esc(k.title)}</b> <span class="muted">${esc(k.kind)} · ${k.count}× · ${esc(k.examples.slice(0, 3).join(', '))}</span></div>`).join('') + '<div class="muted" style="margin-top:4px">Accept or dismiss in Settings → Candidates.</div>', false);
+  // parts.json editor
+  const pj = r.parts_json || {}, TYPES = ['', 'custom', 'fastener', 'bearing', 'seal', 'spring', 'purchased', 'electrical', 'other'];
+  const pnames = [...new Set(r.parts.map(p => p.name.replace(/(#\d+)?(~\d+)?$/, '')))].slice(0, 400);
+  html += card('Part data (parts.json)', `<div class="muted">Type, material and standard of each part: the viewer groups by type, masses use the material, fastener / bearing types steer the collision check.</div>
+    <input id="pjQ" placeholder="Filter parts…" style="margin:6px 0;width:100%;box-sizing:border-box">
+    <table class="ptable" id="pjTable"><thead><tr><th>Part</th><th>Type</th><th>Material</th><th>Standard</th></tr></thead><tbody>${pnames.map(n => { const e = pj[n] || {}; return `<tr data-n="${esc(n)}"><td>${esc(n)}</td><td><select data-k="type">${TYPES.map(t => `<option ${e.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></td><td><input data-k="material" value="${esc(e.material || '')}" placeholder="S235, AlMgSi, PETG…"></td><td><input data-k="standard" value="${esc(e.standard || '')}"></td></tr>`; }).join('')}</tbody></table>
+    <div class="row" style="margin-top:6px"><button class="primary" id="pjSave">Save parts.json</button><span class="muted" id="pjMsg"></span></div>`, false);
+  $('wcOut').innerHTML = html;
+  $('wcOut').querySelectorAll('[data-cp]').forEach(b => b.onclick = () => {
+    const x = c.collisions[+b.dataset.cp]; ovClear(); ovMarker(x.at, 0xe5655a, 18); ovShow(`Collision ${x.a} × ${x.b}`); back3d(); flyToPoint(x.at, (x.len || 10) * 2);
+  });
+  if ($('wcThreads')) $('wcThreads').onclick = () => { ovClear(); ovMarker(c.fastener_overlaps.flatMap(x => x.at), 0x5ac87a, 12); ovShow(`${c.fastener_overlaps.length} thread engagements`); back3d(); };
+  $('pjQ').oninput = () => { const q = $('pjQ').value.toLowerCase(); $('pjTable').querySelectorAll('tbody tr').forEach(tr => tr.style.display = tr.dataset.n.toLowerCase().includes(q) ? '' : 'none'); };
+  $('pjSave').onclick = async () => {
+    const parts = {};
+    $('pjTable').querySelectorAll('tbody tr').forEach(tr => { const e = {}; tr.querySelectorAll('[data-k]').forEach(i => e[i.dataset.k] = i.value.trim()); const o = pj[tr.dataset.n] || {}; if (Object.keys(e).some(k => (o[k] || '') !== e[k])) parts[tr.dataset.n] = e; });
+    if (!Object.keys(parts).length) { $('pjMsg').textContent = ' nothing changed'; return; }
+    try { const res = await api('/api/partsjson', { parts }); $('pjMsg').textContent = ` saved ${Object.keys(parts).length} part(s) → ${res.file}`; Object.assign(pj, parts); } catch (e) { toast(e.message, true); }
+  };
+}
+async function renderHookLog() {
+  let items = [];
+  try { items = (await api('/api/hooklog?n=150')).items; } catch { /* old server */ }
+  const sum = items.reduce((a, i) => a + i.chars, 0);
+  if (!$('wcLog')) return;
+  $('wcLog').innerHTML = card(`Hook log <span class="muted">— what the hooks handed to Claude (last ${items.length}, ≈${tokens(sum)} tokens)</span>`,
+    items.length ? `<table class="ptable"><thead><tr><th>When</th><th>Kind</th><th>≈ tokens</th><th>Folder</th><th>Text</th></tr></thead><tbody>${items.map(i => `<tr><td style="white-space:nowrap">${new Date(i.t * 1000).toLocaleString()}</td><td><span class="badge">${esc(i.kind)}</span></td><td>${tokens(i.chars)}</td><td class="mono" style="font-size:10.5px">${esc((i.cwd || '').split(/[\\/]/).slice(-2).join('/'))}</td><td><details><summary class="muted">${esc(i.text.split('\n')[0].slice(0, 90))}</summary><pre class="wpre">${esc(i.text)}</pre></details></td></tr>`).join('')}</tbody></table>
+      <div class="muted" style="margin-top:6px">Tokens are estimated from the text length (≈3.6 characters per token). Each report replaces work Claude would otherwise do itself: a check script, a screenshot, trial-and-error fixes.</div>`
+      : '<div class="muted">Nothing logged yet. Entries appear when Claude works in a CAD folder (hooks of plugin 0.31+).</div>', false);
+}
+
+// ---- Compute
+let lastParts = null;
+async function partNames() {
+  const key = model.info.step || model.info.path;
+  if (lastReport?.parts && lastReport.model === key) return lastReport.parts.map(p => p.name);
+  if (!lastParts || lastParts.key !== key) {
+    let names;
+    try { names = (await runJob({ tool: 'report' }, $('cmpParts'), 'Reading the parts')).parts.map(p => p.name); } catch { names = model.parts.map(p => p.name); }
+    lastParts = { key, names };
+    if ($('cmpParts')) $('cmpParts').innerHTML = '';
+  }
+  return lastParts.names;
+}
+async function renderComputeWin() {
+  const w = $('winBody');
+  if (!model.info) { w.innerHTML = '<div class="muted">No model open.</div>'; return; }
+  w.innerHTML = `<div class="whead"><h3>Compute</h3><span class="muted">${esc(model.info.name || '')} — runs on this computer, no tokens</span><span class="grow"></span><button class="primary" id="wcBack">3D model</button></div><div id="cmpParts"></div><div id="cmpBody"></div>`;
+  $('wcBack').onclick = back3d;
+  const names = await partNames();
+  if (!$('cmpBody')) return;
+  const opts = names.map(n => `<option>${esc(n)}</option>`).join('');
+  const REG = ['xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax'];
+  $('cmpBody').innerHTML =
+    card('Strength – voxel FEM', `<div class="fgrid">
+      <label>Part<select id="fPart">${opts}</select></label>
+      <label>Fixed at<input id="fFix" list="regList" value="zmin" title="xmin…zmax, plane:Z=20, box:x0,y0,z0,x1,y1,z1, hole:6.6"></label>
+      <label>Load [N]<input id="fLoad" value="zmax=0,0,-100" title="region=Fx,Fy,Fz; several separated by ;"></label>
+      <label>Material<input id="fMat" placeholder="from parts.json, else steel" list="matList"></label>
+      <label>Elements<input id="fEl" type="number" value="40000" min="2000" max="400000"></label></div>
+      <datalist id="regList">${REG.map(r => `<option>${r}</option>`).join('')}</datalist><datalist id="matList">${['steel', 'S355', 'stainless', 'al', '7075', 'PLA', 'PETG', 'ABS', 'PA12', 'POM'].map(m => `<option>${m}</option>`).join('')}</datalist>
+      <div class="row"><button class="primary" id="fRun">Run FEM</button><span class="muted">Comparison tool (±10–30 %); more elements = finer and slower.</span></div><div id="fOut"></div>`)
+    + card('Manufacturability – DFM', `<div class="fgrid"><label>Part<select id="dPart">${opts}</select></label><label>Process<select id="dProc"><option value="print">3D print</option><option value="mill">milling</option><option value="mould">moulding</option></select></label></div>
+      <div class="row"><button class="primary" id="dRun">Check</button><span class="muted">Wall thickness by rays on the exact B-rep, overhangs, draft, radii.</span></div><div id="dOut"></div>`, false)
+    + card('Optimise parameters', '<div id="oBody" class="muted">Loading the script parameters…</div>', false)
+    + card('Compare design variants', `<div class="row"><button class="primary" id="vRun">Compare</button><span class="muted">All name@label.step variants of this model side by side.</span></div><div id="vOut"></div>`, false);
+  $('fRun').onclick = async () => {
+    try {
+      const r = await runJob({ tool: 'fem', part: $('fPart').value, fix: $('fFix').value.split(';').map(s => s.trim()).filter(Boolean), load: $('fLoad').value.split(';').map(s => s.trim()).filter(Boolean), material: $('fMat').value.trim(), elements: +$('fEl').value }, $('fOut'), 'FEM');
+      $('fOut').innerHTML = `<div class="kpis"><div><b>${fmtn(r.max_disp_mm, 3)}</b><span>max deflection mm</span></div><div><b>${fmtn(r.vm_p99_5_MPa, 1)}</b><span>stress p99.5 MPa</span></div><div><b>${fmtn(r.vm_max_MPa, 1)}</b><span>stress max MPa</span></div><div><b>${r.safety_vs_yield_p99_5 ?? '—'}</b><span>safety vs yield</span></div><div><b>${r.elements}</b><span>elements</span></div><div><b>${r._s} s</b><span>time</span></div></div>
+        <div class="muted">${esc(r.material)} · E ${r.E} MPa · yield ${r.yield} MPa · ${r.converged ? 'converged' : 'NOT converged'} · ${esc(r.note)}</div>
+        ${r.image ? `<img class="wimg" src="/api/cachefile?p=${encodeURIComponent(r.image)}">` : ''}
+        <div class="row"><button class="primary" id="fShow">Show stress in 3D</button></div>`;
+      $('fShow').onclick = async () => {
+        const d = await (await fetch('/api/cachefile?p=' + encodeURIComponent(r.points))).json();
+        ovClear();
+        const n = d.v.length, col = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) col.set(heat(d.v[i] / (d.vmax || 1)), i * 3);
+        const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(d.p, 3)).setAttribute('color', new THREE.BufferAttribute(col, 3));
+        const m = new THREE.Points(g, new THREE.PointsMaterial({ size: 4, sizeAttenuation: false, vertexColors: true, depthTest: true }));
+        m.renderOrder = 21; ovGroup.add(m);
+        ovShow(`FEM ${r.part}: von Mises 0 (blue) … ${fmtn(d.vmax, d.vmax < 10 ? 2 : 0)} MPa (red, p99.5) · white dot = maximum`);
+        ovMarker(r.vm_max_at, 0xffffff, 16);
+        back3d();
+      };
+    } catch (e) { $('fOut').innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
+  };
+  $('dRun').onclick = async () => {
+    try {
+      const r = await runJob({ tool: 'dfm', part: $('dPart').value, process: $('dProc').value }, $('dOut'), 'DFM');
+      const ws = r.wall.thin_spots || [];
+      $('dOut').innerHTML = `<div class="kpis"><div><b>${r.wall.min ?? '—'}</b><span>min wall mm</span></div><div><b>${r.wall.p5 ?? '—'}</b><span>wall p5 mm</span></div><div><b>${r.wall.median ?? '—'}</b><span>median wall mm</span></div><div><b>${ws.length}</b><span>thin spots &lt; ${r.min_wall_limit}</span></div>${r.overhang ? `<div><b>${fmtn(r.overhang.support_area_mm2, 0)}</b><span>support area mm²</span></div>` : ''}</div>
+        <div class="muted">Smallest inner radius ${r.radii.min_inner_radius ?? '—'} mm · holes ${esc((r.radii.hole_diameters || []).join(', '))}${r.mill_note ? ' · ' + esc(r.mill_note) : ''}</div>
+        ${ws.length ? `<table class="ptable"><tbody>${ws.map((t, i) => `<tr><td>${t.t_min} mm</td><td class="mono">${t.at.join(', ')}</td><td>${t.samples} samples</td><td><button class="ghost" data-ts="${i}">Show</button></td></tr>`).join('')}</tbody></table>` : ''}
+        <div class="row"><button class="primary" id="dShow">Show all in 3D</button></div>`;
+      const showAll = () => { ovClear(); if (ws.length) ovMarker(ws.flatMap(t => t.at), 0xe5655a, 14); if (r.overhang?.worst_at?.length) ovMarker(r.overhang.worst_at.flat(), 0xd0a020, 12); ovShow(`DFM ${r.part}: red = thin walls, yellow = overhangs`); back3d(); };
+      $('dShow').onclick = showAll;
+      $('dOut').querySelectorAll('[data-ts]').forEach(b => b.onclick = () => { const t = ws[+b.dataset.ts]; ovClear(); ovMarker(t.at, 0xe5655a, 18); ovShow(`Thin wall ${t.t_min} mm`); back3d(); flyToPoint(t.at, 15); });
+    } catch (e) { $('dOut').innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
+  };
+  $('vRun').onclick = async () => {
+    try {
+      const r = await runJob({ tool: 'variants' }, $('vOut'), 'Comparing variants');
+      const best = Math.min(...r.variants.filter(v => !v.error).map(v => v.mass_g));
+      $('vOut').innerHTML = `<table class="ptable"><thead><tr><th>Variant</th><th>Mass</th><th>Size [mm]</th><th>Parts</th><th>Collisions</th><th>Invalid</th><th>expect()</th><th></th></tr></thead><tbody>${r.variants.map(v => v.error ? `<tr><td>${esc(v.label)}</td><td colspan="7">${esc(v.error)}</td></tr>` : `<tr><td><b>${esc(v.label)}</b></td><td>${fmtn(v.mass_g, 1)} g${v.mass_g === best ? ' <span class="badge ok">lightest</span>' : ''}</td><td>${v.size.map(x => fmtn(x, 1)).join(' × ')}</td><td>${v.parts}</td><td>${v.collisions ? `<span class="badge bad">${v.collisions}</span>` : '0'}</td><td>${v.invalid || 0}</td><td>${esc(v.expect || '—')}</td><td><button class="ghost" data-vo="${esc(v.file)}">Open</button></td></tr>`).join('')}</tbody></table>`;
+      $('vOut').querySelectorAll('[data-vo]').forEach(b => b.onclick = () => plugAct({ action: 'open-model', path: b.dataset.vo }).then(back3d).catch(e => toast(e.message, true)));
+    } catch (e) { $('vOut').innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
+  };
+  // optimisation form from the script parameters
+  let pr = { params: [] };
+  try { pr = await api('/api/params'); } catch { /* none */ }
+  if (!$('oBody')) return;
+  const nums = (pr.params || []).filter(p => p.type !== 'bool');
+  if (!nums.length) { $('oBody').innerHTML = '<div class="muted">The model has no parametric script with numeric parameters.</div>'; return; }
+  $('oBody').innerHTML = `<div class="muted">Tick the parameters to vary and their range. Each evaluation rebuilds a throw-away copy of the script (the model is not touched until you apply).</div>
+    <table class="ptable"><thead><tr><th></th><th>Parameter</th><th>Now</th><th>From</th><th>To</th></tr></thead><tbody>${nums.slice(0, 80).map(p => `<tr><td><input type="checkbox" data-o="${esc(p.name)}"></td><td class="mono">${esc(p.name)}</td><td>${p.value}${p.unit ? ' ' + esc(p.unit) : ''}</td><td><input type="number" step="any" data-lo="${esc(p.name)}" value="${p.min ?? +(p.value * 0.5).toFixed(3)}" style="width:80px"></td><td><input type="number" step="any" data-hi="${esc(p.name)}" value="${p.max ?? +(p.value * 1.5).toFixed(3)}" style="width:80px"></td></tr>`).join('')}</tbody></table>
+    <div class="fgrid"><label>Goal<select id="oObj"><option value="mass">minimum mass</option><option value="volume">minimum volume</option><option value="size.z">minimum height</option><option value="fem.max_disp_mm">minimum deflection (needs FEM)</option><option value="fem.vm_p99_5_MPa">minimum stress (needs FEM)</option></select></label>
+      <label>Budget (runs)<input id="oBudget" type="number" value="20" min="4" max="200"></label></div>
+    <label class="muted">Conditions, one per line (e.g. <span class="mono">collisions==0</span>, <span class="mono">size.z&lt;=120</span>, <span class="mono">fem.max_disp_mm&lt;0.2</span>)<textarea id="oSub" rows="3" style="width:100%;box-sizing:border-box"></textarea></label>
+    <label class="muted">FEM for fem.* metrics (optional): <input id="oFem" placeholder="part=Bracket fix=zmin load=zmax=0,0,-200" style="width:100%;box-sizing:border-box"></label>
+    <div class="row"><button class="primary" id="oRun">Optimise</button></div><div id="oOut"></div>`;
+  $('oRun').onclick = async () => {
+    const vary = [...$('oBody').querySelectorAll('[data-o]:checked')].map(c => `${c.dataset.o}=${$('oBody').querySelector(`[data-lo="${c.dataset.o}"]`).value}..${$('oBody').querySelector(`[data-hi="${c.dataset.o}"]`).value}`);
+    if (!vary.length) { toast('Tick at least one parameter.', true); return; }
+    try {
+      const r = await runJob({ tool: 'optimize', vary, objective: $('oObj').value, subject: $('oSub').value.split('\n').map(s => s.trim()).filter(Boolean), budget: +$('oBudget').value, fem: $('oFem').value.trim() || null }, $('oOut'), 'Optimising');
+      if (!r.best) { $('oOut').innerHTML = `<div class="muted">No working variant. ${esc((r.errors || []).join('; '))}</div>`; return; }
+      $('oOut').innerHTML = `<div class="muted">${r.runs} runs (${r.failed_runs} failed) · ${r.feasible ? 'all conditions met' : '<b>no variant met every condition</b> – best compromise shown'}</div>
+        <table class="ptable"><thead><tr><th>Parameters</th><th>${esc(r.objective)}</th></tr></thead><tbody>${r.top5.map(t => `<tr><td class="mono">${esc(Object.entries(t.params).map(([k, v]) => `${k} = ${v}`).join(', '))}</td><td>${Object.values(t).slice(-1)[0]}</td></tr>`).join('')}</tbody></table>
+        <pre class="wpre">${esc(JSON.stringify(r.best.metrics, null, 1))}</pre><div class="row"><button class="primary" id="oApply">Apply the best values and rebuild</button></div>`;
+      $('oApply').onclick = async () => { try { await api('/api/params', { values: r.best.params }); toast('Applied – the model is rebuilding.'); back3d(); } catch (e) { toast(e.message, true); } };
+    } catch (e) { $('oOut').innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
+  };
+}
+
+// ---- System
+async function renderSystemWin() {
+  const w = $('winBody');
+  w.innerHTML = `<div class="whead"><h3>System</h3><span class="grow"></span><button class="primary" id="wcBack">3D model</button></div><div id="syBody" class="muted">Loading…</div>`;
+  $('wcBack').onclick = back3d;
+  let s = {}, md = { text: '', path: '' }, ret = { head: [], rows: [] };
+  try { [s, ret] = await Promise.all([api('/api/system'), api('/api/retro')]); } catch (e) { $('syBody').textContent = e.message; return; }
+  try { md = await api('/api/claudemd'); } catch { md = null; }
+  if (!$('syBody')) return;
+  const yes = (b, t = 'yes', f = 'no') => `<span class="badge ${b ? 'ok' : 'bad'}">${b ? t : f}</span>`;
+  const verOk = s.installed_version && s.installed_version === s.running_version;
+  $('syBody').classList.remove('muted');
+  $('syBody').innerHTML = card('This computer and the plugin', `<div class="kv2">
+      <span>Plugin running</span><span>${esc(s.running_version || '?')} <span class="muted mono">${esc(s.app_folder)}</span></span>
+      <span>Plugin installed</span><span>${esc(s.installed_version || '?')} ${verOk ? yes(true, 'same') : '<span class="badge warn">different – update the plugin or restart</span>'}</span>
+      <span>Helpers ~/.CAD4Ai/lib</span><span>${yes(s.lib_in_sync, 'in sync', 'stale: ' + (s.lib_stale || []).join(', '))}</span>
+      <span>Hooks last active</span><span>${s.hooks_last_run ? new Date(s.hooks_last_run * 1000).toLocaleString() : '<span class="badge warn">never</span>'}</span>
+      <span>Python</span><span>${esc(s.python)} · CadQuery ${esc(s.cadquery || 'missing')} · OCP ${esc(s.ocp || 'missing')}</span>
+      <span>Computer</span><span>${s.cpus} logical CPUs · RAM ${s.ram_gb ?? '?'} GB (${s.ram_free_gb ?? '?'} free) · disk free ${s.disk_free_gb ?? '?'} GB</span>
+      <span>Data</span><span class="mono">${esc(s.app_home)}</span></div>`)
+    + card('Your standing instructions for Claude (CLAUDE.md)', md ? `<div class="muted mono">${esc(md.path)} — saved with a .bak copy of the previous text</div><textarea id="mdText" rows="14" style="width:100%;box-sizing:border-box;font-family:var(--mono,monospace);font-size:12px">${esc(md.text)}</textarea><div class="row"><button class="primary" id="mdSave">Save</button><span class="muted" id="mdMsg"></span></div>` : '<div class="muted">Only on this computer.</div>', false)
+    + card(`Model retro log <span class="muted">— which model and effort each task needed (${ret.rows.length})</span>`, ret.rows.length ? `<table class="ptable"><thead><tr>${ret.head.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${ret.rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '<div class="muted">Empty.</div>', false)
+    + card('Find in your CadQuery scripts', `<div class="row"><input id="fsQ" placeholder="e.g. bearing housing 6204, hinge, příruba" style="flex:1"><button class="primary" id="fsRun">Find</button></div><div id="fsOut"></div>`, true);
+  if ($('mdSave')) $('mdSave').onclick = async () => { try { const r = await api('/api/claudemd', { text: $('mdText').value }); $('mdMsg').textContent = ' saved (previous text in ' + r.backup + ')'; } catch (e) { toast(e.message, true); } };
+  const find = async () => {
+    try {
+      const r = await plugAct({ action: 'find-scripts', q: $('fsQ').value });
+      $('fsOut').innerHTML = r.hits.length ? `<table class="ptable"><tbody>${r.hits.map((h, i) => `<tr><td><b>${esc(h.name)}</b><div class="muted mono" style="font-size:10.5px">${esc(h.where)}</div>${h.doc ? `<div class="muted">${esc(h.doc)}</div>` : ''}</td><td>${h.score}</td><td style="white-space:nowrap"><button class="ghost" data-fm="${i}">Open model</button> <button class="ghost" data-fs="${i}">Open script</button></td></tr>`).join('')}</tbody></table><div class="muted">Index age ${r.index_age_h} h (rebuilt daily; Settings → Data to rebuild now).</div>` : '<div class="muted">Nothing found.</div>';
+      $('fsOut').querySelectorAll('[data-fm]').forEach(b => b.onclick = () => plugAct({ action: 'model-of-script', path: r.hits[+b.dataset.fm].where }).then(back3d).catch(e => toast(e.message, true)));
+      $('fsOut').querySelectorAll('[data-fs]').forEach(b => b.onclick = () => plugAct({ action: 'open-script', path: r.hits[+b.dataset.fs].where }).catch(e => toast(e.message, true)));
+    } catch (e) { toast(e.message, true); }
+  };
+  $('fsRun').onclick = find; $('fsQ').onkeydown = e => { if (e.key === 'Enter') find(); };
+}

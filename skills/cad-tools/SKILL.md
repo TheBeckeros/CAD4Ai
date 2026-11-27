@@ -60,8 +60,11 @@ layout; say so when the user needs exact catalogue values.
   (catalogue, drawing; status "unverified" until checked), write dims() and part() in the library
   convention (main axis local +Z, bottom at Z=0). It is then found by place()/part()/std info and listed
   in the viewer's Settings -> Libraries tab. `cad4ai lib families` lists own families.
-- The viewer's Settings dialog shows everything (presets, libraries with tables and 3D preview, candidates,
-  rules, tools, skills & hooks, data): point the user there instead of explaining it in chat.
+- The viewer shows everything, so point the user there instead of explaining it in chat: Window tabs at the
+  top - Checks (collisions with "show", expect(), diff, lint, unexpected changes, parts.json editor, hook
+  log), Compute (FEM / DFM with results drawn on the model, optimisation, variant comparison), System
+  (versions, CLAUDE.md, retro log, script search); Settings dialog - presets, libraries with 3D preview,
+  candidates, rules, tools, skills & hooks, data.
 
 ## Hooks (automatic, nothing to call)
 - Script run fails -> doctor result arrives with the tool output: failing line, cause, a value that works.

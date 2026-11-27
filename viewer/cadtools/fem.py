@@ -237,6 +237,7 @@ def solve(step, part, fix, loads, material=None, elements=60000, gravity=False, 
     cmax = x0 + (el[imax] + 0.5) * hv
     p995 = float(np.percentile(vm, 99.5))
     imgs = _images(step, inst.name, occ, el, vm, x0, h)
+    pts_file = _points(step, inst.name, x0 + (el + 0.5) * hv, vm, disp_el=None)
     vox_vol = len(el) * float(np.prod(hv))
     res = {"ok": True, "part": inst.name, "material": mat, "E": E, "nu": nu, "yield": fy,
            "voxel_mm": core.r(hv.tolist(), 3), "voxel_volume_ratio": core.r(vox_vol / vol, 3), "elements": int(len(el)), "dof": int(ndof), "cg_iters": it,
@@ -245,9 +246,26 @@ def solve(step, part, fix, loads, material=None, elements=60000, gravity=False, 
            "vm_max_MPa": core.r(float(vm.max()), 1), "vm_max_at": core.r(cmax.tolist()),
            "vm_p99_5_MPa": core.r(p995, 1), "vm_mean_MPa": core.r(float(vm.mean()), 2),
            "safety_vs_yield_p99_5": core.r(fy / p995, 2) if p995 > 0 else None,
-           "image": imgs, "seconds": round(time.time() - t0, 1),
+           "image": imgs, "points": pts_file, "seconds": round(time.time() - t0, 1),
            "note": "voxel FEM: compare variants, do not certify; vm_max at voxel steps is overestimated"}
     return res
+
+
+def _points(step, name, centres, vm, disp_el=None, limit=30000):
+    """Element centres + von Mises for the viewer's 3D overlay (all high-stress ones, the rest thinned)."""
+    import json
+    n = len(vm)
+    idx = np.arange(n)
+    if n > limit:
+        top = np.argsort(vm)[-limit // 4:]
+        rest = np.setdiff1d(idx, top)
+        rest = rest[:: max(1, len(rest) // (limit - len(top)))]
+        idx = np.concatenate([rest, top])
+    p = os.path.join(core.out_dir(step, "fem"), re.sub(r"[^\w.-]+", "_", name) + ".points.json")
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump({"p": np.round(centres[idx], 3).ravel().tolist(), "v": np.round(vm[idx], 2).tolist(),
+                   "vmax": float(np.percentile(vm, 99.5)) if n else 0.0}, f)
+    return p
 
 
 def _images(step, name, occ, el, vm, x0, h):

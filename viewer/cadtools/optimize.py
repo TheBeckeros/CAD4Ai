@@ -77,8 +77,11 @@ def optimise(script, vary, objective, sense=1, subject=(), fem_spec=None, budget
     names = list(vary)
     lo = np.array([vary[n][0] for n in names], float)
     hi = np.array([vary[n][1] for n in names], float)
-    need_coll = any(c.split("<")[0].split(">")[0].strip() in ("collisions", "min_clearance") for c in subject) or \
-        objective in ("collisions", "min_clearance")
+    metrics = [m.group(1) for m in (COND.match(c) for c in subject) if m]
+    if len(metrics) != len(subject):
+        bad = [c for c in subject if not COND.match(c)]
+        raise ValueError(f"condition not understood: {bad} (use e.g. size.z<=40, collisions==0)")
+    need_coll = any(m in ("collisions", "min_clearance") for m in metrics) or objective in ("collisions", "min_clearance")
     hist = []
 
     def evaluate(x):

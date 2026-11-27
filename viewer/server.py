@@ -124,6 +124,162 @@ def safe_data_dir(path):
     return os.path.join(assist.APP_HOME, "sessions", name, os.path.basename(os.path.abspath(path).rstrip("\\/")))
 
 
+JOBS = {}
+
+
+def _cur_step():
+    cur = current() or {}
+    step = cur.get("step") or (cur.get("path") if (cur.get("path") or "").lower().endswith((".step", ".stp")) else None)
+    return step, cur.get("script")
+
+
+def start_job(body):
+    """Long local computations of the Checks / Compute windows, run by cad4ai.py in the background."""
+    tool = body.get("tool")
+    step, script = _cur_step()
+    cli = [sys.executable, "-B", os.path.join(HERE, "cad4ai.py")]
+    if tool in ("report", "variants"):
+        if not step:
+            return {"ok": False, "error": "no STEP model open"}
+        args = [tool, step]
+    elif tool == "fem":
+        if not step:
+            return {"ok": False, "error": "no STEP model open"}
+        args = ["fem", step, str(body["part"])] + sum((["--fix", f] for f in body.get("fix") or []), []) + \
+            sum((["--load", f] for f in body.get("load") or []), []) + ["--elements", str(int(body.get("elements") or 40000))]
+        if body.get("material"):
+            args += ["--material", str(body["material"])]
+    elif tool == "dfm":
+        if not step:
+            return {"ok": False, "error": "no STEP model open"}
+        args = ["dfm", step, str(body["part"]), "--process", str(body.get("process") or "print")]
+    elif tool == "optimize":
+        if not script:
+            return {"ok": False, "error": "the model has no parametric script"}
+        args = ["optimize", script] + sum((["--vary", v] for v in body.get("vary") or []), []) + \
+            [("--maximize" if body.get("maximize") else "--minimize"), str(body.get("objective") or "mass")] + \
+            sum((["--subject", c] for c in body.get("subject") or []), []) + ["--budget", str(int(body.get("budget") or 20))]
+        if body.get("fem"):
+            args += ["--fem", str(body["fem"])]
+    else:
+        return {"ok": False, "error": f"unknown tool {tool}"}
+    jid = secrets.token_hex(4)
+    JOBS[jid] = {"id": jid, "tool": tool, "state": "running", "t0": time.time(), "result": None}
+
+    def run():
+        try:
+            r = subprocess.run(cli + args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=3600, creationflags=0x08000000 if os.name == "nt" else 0)
+            try:
+                JOBS[jid]["result"] = json.loads(r.stdout.strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                JOBS[jid]["result"] = {"ok": False, "error": (r.stderr or r.stdout or "no output")[-600:]}
+        except subprocess.TimeoutExpired:
+            JOBS[jid]["result"] = {"ok": False, "error": "timeout"}
+        JOBS[jid]["state"] = "done"
+        JOBS[jid]["seconds"] = round(time.time() - JOBS[jid]["t0"], 1)
+    threading.Thread(target=run, daemon=True).start()
+    for k in sorted(JOBS, key=lambda k: JOBS[k]["t0"])[:-30]:  # keep the last 30
+        JOBS.pop(k, None)
+    return {"ok": True, "id": jid}
+
+
+def system_info():
+    import platform
+    info = {"python": sys.version.split()[0], "platform": platform.platform(), "cpus": os.cpu_count(),
+            "app_folder": APP_ROOT, "app_home": assist.APP_HOME}
+    try:
+        import cadquery
+        info["cadquery"] = cadquery.__version__
+    except Exception:  # noqa: BLE001
+        info["cadquery"] = None
+    try:
+        import OCP
+        info["ocp"] = getattr(OCP, "__version__", "?")
+    except Exception:  # noqa: BLE001
+        info["ocp"] = None
+    try:
+        import ctypes
+
+        class MS(ctypes.Structure):
+            _fields_ = [("l", ctypes.c_ulong), ("load", ctypes.c_ulong), ("total", ctypes.c_ulonglong),
+                        ("avail", ctypes.c_ulonglong), ("tp", ctypes.c_ulonglong), ("ap", ctypes.c_ulonglong),
+                        ("tv", ctypes.c_ulonglong), ("av", ctypes.c_ulonglong), ("ae", ctypes.c_ulonglong)]
+        m = MS()
+        m.l = ctypes.sizeof(MS)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+        info["ram_gb"], info["ram_free_gb"] = round(m.total / 2 ** 30, 1), round(m.avail / 2 ** 30, 1)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        info["disk_free_gb"] = round(shutil.disk_usage(assist.APP_HOME).free / 2 ** 30, 1)
+    except OSError:
+        pass
+
+    def ver(folder):
+        try:
+            with open(os.path.join(folder, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+                return json.load(f).get("version")
+        except (OSError, ValueError):
+            return None
+    info["running_version"] = ver(APP_ROOT)
+    try:
+        with open(os.path.join(os.path.expanduser("~"), ".claude", "plugins", "installed_plugins.json"), encoding="utf-8") as f:
+            inst = json.load(f).get("plugins", {}).get("CAD4Ai@CAD4Ai", [{}])[0]
+        info["installed_version"], info["installed_path"] = inst.get("version"), inst.get("installPath")
+    except (OSError, ValueError, IndexError):
+        pass
+    lib = os.path.join(assist.APP_HOME, "lib", "cadtools")
+    src = os.path.join(HERE, "cadtools")
+    try:
+        stale = [f for f in os.listdir(src) if f.endswith(".py") and (not os.path.isfile(os.path.join(lib, f)) or
+                 int(os.path.getmtime(os.path.join(lib, f))) != int(os.path.getmtime(os.path.join(src, f))))]
+        info["lib_in_sync"], info["lib_stale"] = not stale, stale[:10]
+    except OSError:
+        info["lib_in_sync"] = False
+    log = os.path.join(assist.APP_HOME, "cache", "hook", "log.jsonl")
+    info["hooks_last_run"] = os.path.getmtime(log) if os.path.isfile(log) else None
+    return info
+
+
+def hook_log(n=200):
+    p = os.path.join(assist.APP_HOME, "cache", "hook", "log.jsonl")
+    try:
+        with open(p, encoding="utf-8") as f:
+            lines = f.readlines()[-n:]
+    except OSError:
+        return []
+    out = []
+    for ln in reversed(lines):
+        try:
+            out.append(json.loads(ln))
+        except ValueError:
+            pass
+    return out
+
+
+CLAUDE_MD = os.path.join(os.path.expanduser("~"), ".claude", "CLAUDE.md")
+RETRO_MD = os.path.join(os.path.expanduser("~"), ".claude", "model-retro-log.md")
+
+
+def retro_rows():
+    try:
+        with open(RETRO_MD, encoding="utf-8") as f:
+            lines = [ln.strip() for ln in f if ln.strip().startswith("|")]
+    except OSError:
+        return {"head": [], "rows": []}
+    rows = [[c.strip() for c in ln.strip("|").split("|")] for ln in lines]
+    rows = [r for r in rows if not all(set(c) <= set("-: ") for c in r)]
+    return {"head": rows[0] if rows else [], "rows": rows[1:][::-1]}
+
+
+def _script_path(raw):
+    """'C:\\x\\a.py:12-40' -> 'C:\\x\\a.py' (drive letter kept)."""
+    raw = str(raw or "")
+    m = re.match(r"^(.*?\.py)(:\d.*)?$", raw)
+    return os.path.abspath(m.group(1) if m else raw)
+
+
 def plugin_action(body, local):
     """Actions of the Settings tabs (libraries, candidates, data)."""
     act = body.get("action")
@@ -154,6 +310,34 @@ def plugin_action(body, local):
                 index.build()
             threading.Thread(target=go, daemon=True).start()
             return {"ok": True, "started": True}
+        if act == "find-scripts":
+            from cadtools import index
+            return {"ok": True, **index.find(str(body.get("q") or ""), 10)}
+        if act == "open-model":
+            p = os.path.abspath(str(body.get("path") or ""))
+            if not p.lower().endswith(MODEL_EXT) or not os.path.isfile(p):
+                return {"ok": False, "error": "not a model file"}
+            open_model(p)
+            return {"ok": True}
+        if act == "model-of-script":  # the STEP a script exports (same folder, named in the script)
+            sp = _script_path(body.get("path"))
+            folder = os.path.dirname(sp)
+            src = open(sp, encoding="utf-8", errors="replace").read() if os.path.isfile(sp) else ""
+            steps = [os.path.join(folder, f) for f in os.listdir(folder) if f.lower().endswith((".step", ".stp")) and
+                     "@" not in f and os.path.splitext(f)[0] in src] if os.path.isdir(folder) else []
+            if not steps:
+                return {"ok": False, "error": "no exported STEP found next to the script"}
+            open_model(max(steps, key=os.path.getmtime))
+            return {"ok": True}
+        if act == "open-script":
+            if not local:
+                return {"ok": False, "error": "only on this computer"}
+            p = _script_path(body.get("path"))
+            if not p.lower().endswith(".py") or not os.path.isfile(p):
+                return {"ok": False, "error": "not a script"}
+            if os.name == "nt":
+                os.startfile(p)  # noqa: S606 - the user's own script, opened in their editor
+            return {"ok": True}
         if act == "reveal":
             if not local:
                 return {"ok": False, "error": "only on this computer"}
@@ -1059,6 +1243,30 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(path)
             if url.path == "/api/settings":
                 return self._send(200, {"values": assist.load_settings(), "defaults": assist.DEFAULTS})
+            if url.path == "/api/job":
+                j = JOBS.get((q.get("id") or [""])[0])
+                return self._send(200, j or {"state": "gone"})
+            if url.path == "/api/hooklog":
+                return self._send(200, {"items": hook_log(int((q.get("n") or ["200"])[0]))})
+            if url.path == "/api/system":
+                return self._send(200, system_info())
+            if url.path == "/api/retro":
+                return self._send(200, retro_rows())
+            if url.path == "/api/claudemd":
+                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                    return self._send(403, {"error": "only on this computer"})
+                try:
+                    with open(CLAUDE_MD, encoding="utf-8") as f:
+                        return self._send(200, {"path": CLAUDE_MD, "text": f.read()})
+                except OSError:
+                    return self._send(200, {"path": CLAUDE_MD, "text": ""})
+            if url.path == "/api/cachefile":  # images / point clouds the tools wrote into ~/.CAD4Ai
+                p = os.path.abspath((q.get("p") or [""])[0])
+                if not p.lower().startswith(os.path.abspath(assist.APP_HOME).lower()) or not os.path.isfile(p) \
+                        or not p.lower().endswith((".png", ".svg", ".json")):
+                    return self._send(404, {"error": "not found"})
+                ct = {"png": "image/png", "svg": "image/svg+xml", "json": "application/json"}[p.rsplit(".", 1)[1].lower()]
+                return self._file(p, ct)
             if url.path == "/api/plugin/catalog":  # Settings tabs: libraries, rules, tools, skills, hooks, data
                 from cadtools import catalog
                 return self._send(200, catalog.overview())
@@ -1398,6 +1606,22 @@ class Handler(BaseHTTPRequestHandler):
 
             if url.path == "/api/settings":
                 return self._send(200, {"values": assist.save_settings(body.get("values") or {})})
+            if url.path == "/api/job":
+                return self._send(200, start_job(body))
+            if url.path == "/api/partsjson":
+                step, _ = _cur_step()
+                if not step:
+                    return self._send(404, {"error": "no STEP model"})
+                from cadtools import report
+                return self._send(200, report.save_parts_json(step, body.get("parts") or {}))
+            if url.path == "/api/claudemd":
+                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                    return self._send(403, {"error": "only on this computer"})
+                if os.path.isfile(CLAUDE_MD):
+                    shutil.copy2(CLAUDE_MD, CLAUDE_MD + ".bak")  # one step back
+                with open(CLAUDE_MD, "w", encoding="utf-8") as f:
+                    f.write(str(body.get("text") or ""))
+                return self._send(200, {"ok": True, "backup": CLAUDE_MD + ".bak"})
             if url.path == "/api/plugin/action":
                 return self._send(200, plugin_action(body, self.client_address[0] in ("127.0.0.1", "::1")))
             if url.path == "/api/related":

@@ -13,6 +13,8 @@
   cad4ai lint     S.py [--info]             static check before running (names, fillets, hole sizes, params)
   cad4ai new      S.py [--title ..]         script skeleton: params, assembly, export, expect(), std, cache
   cad4ai partsjson M.step                   fill in missing parts.json entries
+  cad4ai report   M.step                    everything the checks know about a model (viewer Checks window)
+  cad4ai variants M.step                    design variants side by side (mass, size, collisions, expect)
   cad4ai lib      candidates | accept ID | dismiss ID | new ID [title] | families   own library families
   cad4ai std      "ISO 4762 M5x16" | hole M5 | key 30 | list [--step]
   cad4ai vendor   V.step                    mounting interface of a purchased part
@@ -163,6 +165,16 @@ def cmd_lib(a):
                    "folder": userlib.DIR})
     else:
         raise ValueError("lib candidates | accept ID | dismiss ID | new ID [title] | families")
+
+
+def cmd_report(a):
+    from cadtools import report
+    core.emit(report.build(a.step))
+
+
+def cmd_variants(a):
+    from cadtools import report
+    core.emit(report.variants(a.step))
 
 
 def cmd_lint(a):
@@ -341,6 +353,8 @@ def main(argv=None):
     s = add("after", cmd_after, "step")
     s.add_argument("--max-parts", type=int, default=5000)
     add("check", cmd_check, "step")
+    add("report", cmd_report, "step")
+    add("variants", cmd_variants, "step")
     s = add("lib", cmd_lib)
     s.add_argument("args", nargs="*")
     s = add("lint", cmd_lint, "script")
