@@ -148,8 +148,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - First public version as `cad-preview`: STEP / STL viewer pane for Claude Code with parts panel,
   navigation, measurement and a marketplace manifest.
 
-[Unreleased]: https://github.com/TheBeckeros/CAD4Ai/compare/fe600e0...HEAD
-[0.31.0]: https://github.com/TheBeckeros/CAD4Ai/commit/6fd4ad2
+[Unreleased]: https://github.com/TheBeckeros/CAD4Ai/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/TheBeckeros/CAD4Ai/releases/tag/v0.31.0
 [0.30.0]: https://github.com/TheBeckeros/CAD4Ai/commit/95c8958
 [0.28.2]: https://github.com/TheBeckeros/CAD4Ai/commit/fb29ced
 [0.27.0]: https://github.com/TheBeckeros/CAD4Ai/commit/6adc0f7
